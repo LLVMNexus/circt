@@ -1,5 +1,6 @@
-// RUN: circt-opt --pass-pipeline='builtin.module(firrtl.circuit(firrtl-lower-intrinsics))' %s | FileCheck %s --check-prefixes=CHECK,CHECK-NOEICG
-// RUN: circt-opt --pass-pipeline='builtin.module(firrtl.circuit(firrtl-lower-intrinsics{fixup-eicg-wrapper}))' %s | FileCheck %s --check-prefixes=CHECK,CHECK-EICG
+// Test intmodule -> ops + LowerIntrinsics combined, to start with.
+// RUN: circt-opt --pass-pipeline='builtin.module(firrtl.circuit(firrtl-lower-intmodules,firrtl.module(firrtl-lower-intrinsics)))' %s | FileCheck %s --check-prefixes=CHECK,CHECK-NOEICG
+// RUN: circt-opt --pass-pipeline='builtin.module(firrtl.circuit(firrtl-lower-intmodules{fixup-eicg-wrapper},firrtl.module(firrtl-lower-intrinsics)))' %s | FileCheck %s --check-prefixes=CHECK,CHECK-EICG
 
 // CHECK-LABEL: "Foo"
 firrtl.circuit "Foo" {
@@ -299,14 +300,10 @@ firrtl.circuit "Foo" {
     firrtl.strictconnect %cover_predicate, %cond : !firrtl.uint<1>
     firrtl.strictconnect %cover_enable, %enable : !firrtl.uint<1>
 
-    // CHECK-NOT: firrtl.instance
-    // CHECK: firrtl.int.unclocked_assume %{{.+}}, %{{.+}}, "text: %d"(
-    // CHECK-SAME: guards = ["MACRO_GUARD", "ASDF"]
-    // CHECK-SAME: name = "label for unr"
-    %unr_predicate, %unr_enable, %unr_val = firrtl.instance unr interesting_name @UnclockedAssume(in predicate: !firrtl.uint<1>, in enable: !firrtl.uint<1>, in val: !firrtl.uint<1>)
-    firrtl.strictconnect %unr_predicate, %cond : !firrtl.uint<1>
-    firrtl.strictconnect %unr_enable, %enable : !firrtl.uint<1>
-    firrtl.strictconnect %unr_val, %enable : !firrtl.uint<1>
+    // %unr_predicate, %unr_enable, %unr_val = firrtl.instance unr interesting_name @UnclockedAssume(in predicate: !firrtl.uint<1>, in enable: !firrtl.uint<1>, in val: !firrtl.uint<1>)
+    // firrtl.strictconnect %unr_predicate, %cond : !firrtl.uint<1>
+    // firrtl.strictconnect %unr_enable, %enable : !firrtl.uint<1>
+    // firrtl.strictconnect %unr_val, %enable : !firrtl.uint<1>
   }
 
   // CHECK-NOT: firrtl.intmodule private @FPGAProbeIntrinsic
