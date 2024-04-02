@@ -24,6 +24,7 @@
 #include "circt/Dialect/FIRRTL/Passes.h"
 #include "circt/Dialect/FSM/FSMPasses.h"
 #include "circt/Dialect/HW/HWPasses.h"
+#include "circt/Dialect/Sim/SimPasses.h"
 #include "circt/Dialect/Handshake/HandshakePasses.h"
 #include "circt/Dialect/Ibis/IbisPasses.h"
 #include "circt/Dialect/LLHD/Transforms/Passes.h"
@@ -61,6 +62,7 @@ inline void registerAllPasses() {
   msft::registerPasses();
   om::registerPasses();
   seq::registerPasses();
+  sim::registerPasses();
   sv::registerPasses();
   handshake::registerPasses();
   ibis::registerPasses();

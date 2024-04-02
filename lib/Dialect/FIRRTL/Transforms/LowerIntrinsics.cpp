@@ -243,6 +243,23 @@ public:
   }
 };
 
+class CirctDPIImportAndCallConverter : public IntrinsicConverter {
+public:
+  using IntrinsicConverter::IntrinsicConverter;
+
+  bool check(GenericIntrinsic gi) override {
+    return gi.typedInput<ClockType>(0) || gi.hasNParam(1) ||
+           gi.namedParam("function_name");
+  }
+  void convert(GenericIntrinsic gi, GenericIntrinsicOpAdaptor adaptor,
+               PatternRewriter &rewriter) override {
+    rewriter.replaceOpWithNewOp<DPIImportAndCallIntrinsicOp>(
+        gi.op, gi.op.getResultTypes(),
+        gi.getParamValue<StringAttr>("function_name"),
+        adaptor.getOperands().front(), adaptor.getOperands().drop_front());
+  }
+};
+
 template <class OpTy, bool ifElseFatal = false>
 class CirctAssertConverter : public IntrinsicConverter {
 public:
@@ -434,6 +451,8 @@ LogicalResult LowerIntrinsicsPass::initialize(MLIRContext *context) {
   lowering.add<CirctAssertConverter<AssumeOp>>("circt.chisel_assume",
                                                "circt_chisel_assume");
   lowering.add<CirctCoverConverter>("circt.chisel_cover", "circt_chisel_cover");
+  lowering.add<CirctDPIImportAndCallConverter>("circt.dpi_import_and_call",
+                                               "circt_dpi_import_and_call");
 
   this->lowering = std::make_shared<IntrinsicLowerings>(std::move(lowering));
   return success();

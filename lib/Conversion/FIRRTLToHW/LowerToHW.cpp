@@ -1622,6 +1622,7 @@ struct FIRRTLLowering : public FIRRTLVisitor<FIRRTLLowering, LogicalResult> {
   LogicalResult visitStmt(VerifCoverIntrinsicOp op);
   LogicalResult visitExpr(HasBeenResetIntrinsicOp op);
   LogicalResult visitStmt(UnclockedAssumeIntrinsicOp op);
+  LogicalResult visitExpr(DPIImportAndCallIntrinsicOp op);
 
   // Other Operations
   LogicalResult visitExpr(BitsPrimOp op);
@@ -3754,6 +3755,37 @@ LogicalResult FIRRTLLowering::visitExpr(HasBeenResetIntrinsicOp op) {
     return failure();
   }
   return setLoweringTo<verif::HasBeenResetOp>(op, clock, reset, isAsync);
+}
+
+LogicalResult FIRRTLLowering::visitExpr(DPIImportAndCallIntrinsicOp op) {
+  Value clock = getLoweredValue(op.getClock());
+  if (!clock)
+    return failure();
+  SmallVector<Value> operands;
+  for (auto value : op.getInputs()) {
+    operands.push_back(getLoweredValue(value));
+    if (!operands.back())
+      return failure();
+  }
+  SmallVector<Type> resultTypes;
+  for (auto ty : op.getResultTypes()) {
+    resultTypes.push_back(lowerType(ty));
+    if (!resultTypes.back())
+      return failure();
+  }
+  auto callOp = builder.create<sim::DPIImportAndCallOp>(
+      TypeRange{resultTypes}, op.getFunctionNameAttr(), clock, operands);
+  for (auto [oldVal, result] :
+       llvm::zip(op.getResults(), callOp.getResults())) {
+    Value newVal = result;
+    // Insert one clock??
+     newVal = (Value)builder.create<seq::FirRegOp>(
+         newVal, clock, builder.getStringAttr(op.getFunctionName() + "_res"));
+
+    if (failed(setLowering(oldVal, newVal)))
+      return failure();
+  }
+  return success();
 }
 
 //===----------------------------------------------------------------------===//

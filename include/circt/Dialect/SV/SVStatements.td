@@ -12,6 +12,8 @@
 
 include "mlir/IR/EnumAttr.td"
 include "mlir/IR/OpAsmInterface.td"
+include "mlir/Interfaces/FunctionInterfaces.td"
+include "circt/Dialect/Emit/EmitOpInterfaces.td"
 
 //===----------------------------------------------------------------------===//
 // Control flow like-operations
@@ -877,5 +879,84 @@ def MacroDefOp : SVOp<"macro.def",
 
   let extraClassDeclaration = [{
     MacroDeclOp getReferencedMacro(const hw::HWSymbolCache *cache);
+  }];
+}
+
+
+//===----------------------------------------------------------------------===//
+// Function/Call
+//===----------------------------------------------------------------------===//
+
+def FunctionDPIImportOp: SVOp<"function.dpi.import", 
+  [DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
+  let summary = "Simulation failure condition";
+
+  let arguments = (ins FlatSymbolRefAttr:$callee);
+  let results = (outs);
+
+  let assemblyFormat = "$callee attr-dict";
+}
+
+// TODO: Add a interface for function declarations.
+def FunctionDPIDeclareOp : SVOp<"function.dpi.decl", [IsolatedFromAbove, Symbol,
+      FunctionOpInterface, HasParent<"mlir::ModuleOp">]> {
+  let summary = "Import a DPI function";
+
+  let arguments = (ins 
+      SymbolNameAttr:$sym_name,
+      TypeAttrOf<ModuleType>:$module_type,
+      OptionalAttr<StrAttr>:$verilogName);
+
+  let assemblyFormat =
+     "$sym_name (`function_name` $verilogName^)? attr-dict `:` $module_type $body";
+  let results = (outs);
+  let regions = (region AnyRegion:$body);
+
+  let hasCustomAssemblyFormat = 1;
+  let extraClassDeclaration = [{
+    mlir::FunctionType getFunctionType() {
+      return getModuleType().getFuncType();
+    }
+
+    void setFunctionTypeAttr(mlir::TypeAttr mlirType) {
+      // FIXME: This is really unsafe ...... probably we should implement our own 
+      //        FunctionOpInterface for named/ordered types.
+      assert(false);
+    }
+
+    /// Returns the argument types of this function.
+    ArrayRef<Type> getArgumentTypes() { return getFunctionType().getInputs(); }
+
+    /// Returns the result types of this function.
+    ArrayRef<Type> getResultTypes() { return getFunctionType().getResults(); }
+
+    ::mlir::Region *getCallableRegion() { return nullptr; }
+  }];
+}
+
+def FunctionCallProceduralOp : SVOp<"function.call.procedural", [CallOpInterface, 
+  DeclareOpInterfaceMethods<SymbolUserOpInterface>, ProceduralOp]> {
+  let summary = "Simulation failure condition";
+
+  let arguments = (ins FlatSymbolRefAttr:$callee, Variadic<AnyType>:$inputs);
+  let results = (outs Variadic<AnyType>);
+
+  let assemblyFormat = 
+      "$callee `(` $inputs `)` attr-dict `:` functional-type($inputs, results)";
+  let extraClassDeclaration = [{
+    operand_range getArgOperands() {
+      return getInputs();
+    }
+    MutableOperandRange getArgOperandsMutable() {
+      return getInputsMutable();
+    }
+    mlir::CallInterfaceCallable getCallableForCallee() {
+      return (*this)->getAttrOfType<mlir::SymbolRefAttr>("callee");
+    }
+
+    /// Set the callee for this operation.
+    void setCalleeFromCallable(mlir::CallInterfaceCallable callee) {
+      (*this)->setAttr(getCalleeAttrName(), callee.get<mlir::SymbolRefAttr>());
+    }
   }];
 }

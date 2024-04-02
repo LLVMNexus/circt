@@ -190,7 +190,8 @@ StringRef ExportVerilog::getSymOpName(Operation *symOp) {
   if (auto attr = symOp->getAttrOfType<StringAttr>("hw.verilogName"))
     return attr.getValue();
   return TypeSwitch<Operation *, StringRef>(symOp)
-      .Case<HWModuleOp, HWModuleExternOp, HWModuleGeneratedOp>(
+      .Case<HWModuleOp, HWModuleExternOp, HWModuleGeneratedOp,
+            sv::FunctionDPIDeclareOp>(
           [](Operation *op) { return getVerilogModuleName(op); })
       .Case<InterfaceOp>([&](InterfaceOp op) {
         return getVerilogModuleNameAttr(op).getValue();
@@ -3656,7 +3657,8 @@ void NameCollector::collectNames(Block &block) {
     // Instances have an instance name to recognize but we don't need to look
     // at the result values since wires used by instances should be traversed
     // anyway.
-    if (isa<InstanceOp, InstanceChoiceOp, InterfaceInstanceOp>(op))
+    if (isa<InstanceOp, InstanceChoiceOp, InterfaceInstanceOp,
+            FunctionCallProceduralOp>(op))
       continue;
     if (isa<ltl::LTLDialect, debug::DebugDialect>(op.getDialect()))
       continue;
@@ -3837,6 +3839,9 @@ private:
   LogicalResult visitVerif(verif::AssumeOp op);
   LogicalResult visitVerif(verif::CoverOp op);
 
+  LogicalResult visitSV(FunctionDPIImportOp op);
+  LogicalResult visitSV(FunctionCallProceduralOp op);
+
 public:
   ModuleEmitter &emitter;
 
@@ -3933,6 +3938,9 @@ LogicalResult StmtEmitter::visitSV(AssignOp op) {
 }
 
 LogicalResult StmtEmitter::visitSV(BPAssignOp op) {
+  if (op.getSrc().getDefiningOp<FunctionCallProceduralOp>())
+    return success();
+
   // If the assign is emitted into logic declaration, we must not emit again.
   if (emitter.assignsInlined.count(op))
     return success();
@@ -4124,6 +4132,83 @@ LogicalResult StmtEmitter::visitStmt(TypedeclOp op) {
   if (zeroBitType)
     ps << PP::end;
   emitLocationInfoAndNewLine(ops);
+  return success();
+}
+
+LogicalResult StmtEmitter::visitSV(FunctionCallProceduralOp op) {
+  startStatement();
+
+  auto callee = cast<FunctionDPIDeclareOp>(
+      state.symbolCache.getDefinition(op.getCalleeAttr()));
+
+  ps << PPExtString(getSymOpName(callee)) << "(";
+
+  SmallPtrSet<Operation *, 8> ops;
+  ops.insert(op);
+
+  bool needsComma = false;
+  auto printArg = [&](Value value) {
+    if (needsComma)
+      ps << "," << PP::space;
+    emitExpression(value, ops);
+    needsComma = true;
+  };
+
+  ps.scopedBox(PP::ibox0, [&] {
+    for (Value arg : op.getInputs())
+      printArg(arg);
+    for (Value result : op.getResults())
+      printArg(result.getUsers().begin()->getOperand(0));
+  });
+
+  ps << ");";
+  emitLocationInfoAndNewLine(ops);
+  return success();
+}
+
+LogicalResult StmtEmitter::visitSV(FunctionDPIImportOp importOp) {
+  startStatement();
+
+  ps << "import \"DPI-C\" function void ";
+  auto op = cast<FunctionDPIDeclareOp>(
+      state.symbolCache.getDefinition(importOp.getCalleeAttr()));
+  ps << PPExtString(getSymOpName(op));
+  ps << "(";
+
+  ps.scopedBox(PP::bbox2, [&]() {
+    bool needsComma = false;
+    auto printArg = [&](StringRef kind, Attribute name, Type ty) {
+      if (needsComma)
+        ps << ",";
+      ps << PP::newline << kind << " ";
+
+      // Emit the type.
+      {
+        SmallString<8> typeString;
+        llvm::raw_svector_ostream stringStream(typeString);
+        emitter.printPackedType(stripUnpackedTypes(ty), stringStream,
+                                op->getLoc());
+        if (!typeString.empty())
+          ps << typeString;
+      }
+
+      ps << " " << PPExtString(name.cast<StringAttr>().getValue());
+
+      // Print out any array subscripts or other post-name stuff.
+      ps.invokeWithStringOS(
+          [&](auto &os) { emitter.printUnpackedTypePostfix(ty, os); });
+      needsComma = true;
+    };
+
+    auto ports = op.getModuleType().getPorts();
+    for (auto port : ports)
+      printArg(port.dir == PortInfo::Direction::Input ? "input " : "output ",
+               port.name, port.type);
+  });
+
+  ps << PP::newline << ");" << PP::newline;
+  setPendingNewline();
+  return success();
   return success();
 }
 
@@ -6339,7 +6424,7 @@ void SharedEmitterState::gatherFiles(bool separateModules) {
             separateFile(op);
           }
         })
-        .Case<MacroDeclOp>([&](auto op) {
+        .Case<MacroDeclOp, FunctionDPIDeclareOp>([&](auto op) {
           symbolCache.addDefinition(op.getSymNameAttr(), op);
         })
         .Case<om::ClassLike>([&](auto op) {
@@ -6436,7 +6521,7 @@ static void emitOperation(VerilogEmitterState &state, Operation *op) {
       })
       .Case<emit::FileOp, emit::FileListOp, emit::FragmentOp>(
           [&](auto op) { FileEmitter(state).emit(op); })
-      .Case<MacroDefOp>(
+      .Case<MacroDefOp, FunctionDPIImportOp>(
           [&](auto op) { ModuleEmitter(state).emitStatement(op); })
       .Default([&](auto *op) {
         state.encounteredError = true;

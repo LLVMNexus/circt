@@ -2107,6 +2107,22 @@ ModportStructAttr ModportStructAttr::get(MLIRContext *context,
 }
 
 //===----------------------------------------------------------------------===//
+// Function/Call Ops.
+//===----------------------------------------------------------------------===//
+
+LogicalResult
+FunctionCallProceduralOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+  // TODO: Fill
+  return success();
+}
+
+LogicalResult
+FunctionDPIImportOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+  // TODO: Fill
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // TableGen generated logic.
 //===----------------------------------------------------------------------===//
 

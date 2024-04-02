@@ -53,7 +53,8 @@ public:
             LTLConcatIntrinsicOp, LTLNotIntrinsicOp, LTLImplicationIntrinsicOp,
             LTLEventuallyIntrinsicOp, LTLClockIntrinsicOp,
             LTLDisableIntrinsicOp, Mux2CellIntrinsicOp, Mux4CellIntrinsicOp,
-            HasBeenResetIntrinsicOp, FPGAProbeIntrinsicOp, GenericIntrinsicOp,
+            HasBeenResetIntrinsicOp, FPGAProbeIntrinsicOp,
+            DPIImportAndCallIntrinsicOp, GenericIntrinsicOp,
             // Miscellaneous.
             BitsPrimOp, HeadPrimOp, MuxPrimOp, PadPrimOp, ShlPrimOp, ShrPrimOp,
             TailPrimOp, VerbatimExprOp, HWStructCastOp, BitCastOp, RefSendOp,
@@ -180,6 +181,7 @@ public:
   HANDLE(Mux2CellIntrinsicOp, Unhandled);
   HANDLE(HasBeenResetIntrinsicOp, Unhandled);
   HANDLE(FPGAProbeIntrinsicOp, Unhandled);
+  HANDLE(DPIImportAndCallIntrinsicOp, Unhandled);
   HANDLE(GenericIntrinsicOp, Unhandled);
 
   // Miscellaneous.

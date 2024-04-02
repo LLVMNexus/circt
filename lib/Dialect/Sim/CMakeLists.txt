@@ -20,6 +20,7 @@ add_circt_dialect_library(CIRCTSim
   CIRCTHW
   CIRCTSV
   MLIRSimIncGen
+  MLIRFuncOpsIncGen
 
   LINK_COMPONENTS
   Support
@@ -32,3 +33,5 @@ add_circt_dialect_library(CIRCTSim
   MLIRPass
   MLIRTransforms
 )
+
+add_subdirectory(Transforms)

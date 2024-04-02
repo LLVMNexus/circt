@@ -13,6 +13,7 @@
 #include "circt/Conversion/SimToSV.h"
 #include "../PassDetail.h"
 #include "circt/Dialect/Comb/CombOps.h"
+#include "circt/Dialect/Emit/EmitOps.h"
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/SV/SVOps.h"
 #include "circt/Dialect/Seq/SeqOps.h"
@@ -157,6 +158,41 @@ public:
   }
 };
 
+class DPICallLowering : public SimConversionPattern<DPICallOp> {
+public:
+  using SimConversionPattern<DPICallOp>::SimConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(DPICallOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    auto loc = op.getLoc();
+    Value clockCast =
+        rewriter.create<seq::FromClockOp>(loc, adaptor.getClock());
+    SmallVector<Value> temporaries;
+    for (auto [type, result] :
+         llvm::zip(op.getResultTypes(), op.getResults())) {
+      temporaries.push_back(rewriter.create<sv::RegOp>(op.getLoc(), type));
+      auto read =
+          rewriter.create<sv::ReadInOutOp>(op.getLoc(), temporaries.back());
+      rewriter.replaceAllUsesWith(result, read);
+    }
+
+    rewriter.create<sv::AlwaysOp>(
+        // TODO: Nede to provide other than posedge?
+        loc, ArrayRef<sv::EventControl>{sv::EventControl::AtPosEdge},
+        ArrayRef<Value>{clockCast}, [&]() {
+          auto call = rewriter.create<sv::FunctionCallProceduralOp>(
+              op.getLoc(), op.getResultTypes(), op.getCalleeAttr(),
+              adaptor.getInputs());
+          for (auto [lhs, rhs] : llvm::zip(temporaries, call.getResults()))
+            rewriter.create<sv::BPAssignOp>(op.getLoc(), lhs, rhs);
+          rewriter.eraseOp(op);
+        });
+
+    return success();
+  }
+};
+
 namespace {
 struct SimToSVPass : public LowerSimToSVBase<SimToSVPass> {
   void runOnOperation() override {
@@ -164,7 +200,29 @@ struct SimToSVPass : public LowerSimToSVBase<SimToSVPass> {
     MLIRContext *context = &getContext();
 
     SimConversionState state;
-    auto lowerModule = [&](hw::HWModuleOp module) {
+    struct LocalState {
+      hw::HWModuleOp module;
+      SetVector<Attribute> dpiCallees;
+    };
+
+    auto lowerModule = [&](LocalState &localState) {
+      auto module = localState.module;
+      // Set fragments.
+      llvm::SetVector<Attribute> fragments;
+      if (auto exstingFragments =
+              module->getAttrOfType<ArrayAttr>(emit::getFragmentsAttrName()))
+        for (auto fragment : exstingFragments.getAsRange<FlatSymbolRefAttr>())
+          fragments.insert(fragment);
+
+      module.walk([&](sim::DPICallOp callOp) {
+        localState.dpiCallees.insert(callOp.getCalleeAttr().getAttr());
+      });
+
+      if (!fragments.empty())
+        module->setAttr(
+            emit::getFragmentsAttrName(),
+            ArrayAttr::get(module.getContext(), fragments.takeVector()));
+
       ConversionTarget target(*context);
       target.addIllegalDialect<SimDialect>();
       target.addLegalDialect<sv::SVDialect>();
@@ -175,6 +233,8 @@ struct SimToSVPass : public LowerSimToSVBase<SimToSVPass> {
       RewritePatternSet patterns(context);
       patterns.add<PlusArgsTestLowering>(context, state);
       patterns.add<PlusArgsValueLowering>(context, state);
+      patterns.add<DPICallLowering>(context, state);
+
       patterns.add<SimulatorStopLowering<sim::FinishOp, sv::FinishOp>>(context,
                                                                        state);
       patterns.add<SimulatorStopLowering<sim::FatalOp, sv::FatalOp>>(context,
@@ -182,11 +242,60 @@ struct SimToSVPass : public LowerSimToSVBase<SimToSVPass> {
       return applyPartialConversion(module, target, std::move(patterns));
     };
 
-    if (failed(mlir::failableParallelForEach(
-            context, circuit.getOps<hw::HWModuleOp>(), lowerModule)))
+    SmallVector<LocalState> localStates;
+    for (auto mod : circuit.getOps<hw::HWModuleOp>())
+      localStates.push_back({mod, {}});
+
+    if (failed(
+            mlir::failableParallelForEach(context, localStates, lowerModule)))
       return signalPassFailure();
 
-    if (state.usedSynthesisMacro) {
+    DenseMap<Attribute, FlatSymbolRefAttr> dpiFragmentMapping;
+    llvm::errs() << "baz!\n";
+    for (auto dpiImportOp :
+         llvm::make_early_inc_range(circuit.getOps<sim::DPIImportOp>())) {
+      ImplicitLocOpBuilder builder(dpiImportOp.getLoc(), dpiImportOp);
+      builder.create<sv::FunctionDPIDeclareOp>(
+          dpiImportOp.getSymNameAttr(), dpiImportOp.getModuleType(),
+          dpiImportOp.getVerilogNameAttr());
+
+      auto fragmentSym = FlatSymbolRefAttr::get(builder.getStringAttr(
+          dpiImportOp.getSymName() + Twine("_dpi_import_fragment")));
+
+      bool success =
+          dpiFragmentMapping.insert({dpiImportOp.getSymNameAttr(), fragmentSym})
+              .second;
+      assert(success);
+      builder.create<emit::FragmentOp>(fragmentSym.getAttr(), [&]() {
+        builder.create<sv::IfDefOp>(
+            "SYNTHESIS", []() {},
+            [&]() {
+              builder.create<sv::FunctionDPIImportOp>(dpiImportOp.getSymName());
+            });
+      });
+
+      dpiImportOp.erase();
+    }
+
+    llvm::errs() << "baz!\n";
+
+    mlir::parallelForEach(context, localStates, [&](LocalState &localState) {
+      auto module = localState.module;
+      // Set fragments.
+      llvm::SetVector<Attribute> fragments;
+      if (auto exstingFragments =
+              module->getAttrOfType<ArrayAttr>(emit::getFragmentsAttrName()))
+        for (auto fragment : exstingFragments.getAsRange<FlatSymbolRefAttr>())
+          fragments.insert(fragment);
+      for (auto f : localState.dpiCallees.takeVector())
+        fragments.insert(dpiFragmentMapping.lookup(f));
+      if (!fragments.empty())
+        module->setAttr(
+            emit::getFragmentsAttrName(),
+            ArrayAttr::get(module.getContext(), fragments.takeVector()));
+    });
+
+    if (!dpiFragmentMapping.empty() || state.usedSynthesisMacro) {
       Operation *op = circuit.lookupSymbol("SYNTHESIS");
       if (op) {
         if (!isa<sv::MacroDeclOp>(op)) {

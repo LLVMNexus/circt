@@ -5020,6 +5020,9 @@ SizeOfIntrinsicOp::inferUnaryReturnType(FIRRTLType input,
   return UIntType::get(input.getContext(), 32);
 }
 
+void DPIImportAndCallIntrinsicOp::getAsmResultNames(
+    function_ref<void(Value, StringRef)> setNameFn) {}
+
 FIRRTLType AsSIntPrimOp::inferUnaryReturnType(FIRRTLType input,
                                               std::optional<Location> loc) {
   auto base = type_dyn_cast<FIRRTLBaseType>(input);
