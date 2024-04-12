@@ -8,6 +8,7 @@
 //
 // This file defines the LowerIntrinsics pass.  This pass processes FIRRTL
 // generic intrinsic operations and rewrites to their implementation.
+// generic intrinsic operations and rewrites to their implementation.
 //
 //===----------------------------------------------------------------------===//
 
@@ -22,18 +23,26 @@ using namespace firrtl;
 namespace {
 
 class CirctSizeofConverter : public IntrinsicOpConverter<SizeOfIntrinsicOp> {
+class CirctSizeofConverter : public IntrinsicOpConverter<SizeOfIntrinsicOp> {
 public:
   using IntrinsicOpConverter::IntrinsicOpConverter;
+  using IntrinsicOpConverter::IntrinsicOpConverter;
 
+  bool check(GenericIntrinsic gi) override {
+    return gi.hasNInputs(1) || gi.sizedOutput<UIntType>(32) || gi.hasNParam(0);
   bool check(GenericIntrinsic gi) override {
     return gi.hasNInputs(1) || gi.sizedOutput<UIntType>(32) || gi.hasNParam(0);
   }
 };
 
 class CirctIsXConverter : public IntrinsicOpConverter<IsXIntrinsicOp> {
+class CirctIsXConverter : public IntrinsicOpConverter<IsXIntrinsicOp> {
 public:
   using IntrinsicOpConverter::IntrinsicOpConverter;
+  using IntrinsicOpConverter::IntrinsicOpConverter;
 
+  bool check(GenericIntrinsic gi) override {
+    return gi.hasNInputs(1) || gi.sizedOutput<UIntType>(1) || gi.hasNParam(0);
   bool check(GenericIntrinsic gi) override {
     return gi.hasNInputs(1) || gi.sizedOutput<UIntType>(1) || gi.hasNParam(0);
   }
@@ -44,10 +53,14 @@ public:
   using IntrinsicConverter::IntrinsicConverter;
 
   bool check(GenericIntrinsic gi) override {
-    return gi.hasNInputs(0) || gi.sizedOutput<UIntType>(1) ||
-           gi.namedParam("FORMAT") || gi.hasNParam(1);
+    return gi.hasNInputs(0) || gi.sizedOutput<UIntType>(1) || gi.hasNParam(1) ||
+           gi.namedParam("FORMAT");
   }
 
+  void convert(GenericIntrinsic gi, GenericIntrinsicOpAdaptor adaptor,
+               PatternRewriter &rewriter) override {
+    rewriter.replaceOpWithNewOp<PlusArgsTestIntrinsicOp>(
+        gi.op, gi.getParamValue<StringAttr>("FORMAT"));
   void convert(GenericIntrinsic gi, GenericIntrinsicOpAdaptor adaptor,
                PatternRewriter &rewriter) override {
     rewriter.replaceOpWithNewOp<PlusArgsTestIntrinsicOp>(
@@ -62,17 +75,16 @@ public:
   bool check(GenericIntrinsic gi) override {
     return gi.hasNOutputElements(2) ||
            gi.sizedOutputElement<UIntType>(0, "found", 1) ||
-           gi.hasOutputElement(1, "result") || gi.namedParam("FORMAT") ||
-           gi.hasNParam(1);
+           gi.hasOutputElement(1, "result") || gi.hasNParam(1) ||
+           gi.namedParam("FORMAT");
   }
 
   void convert(GenericIntrinsic gi, GenericIntrinsicOpAdaptor adaptor,
                PatternRewriter &rewriter) override {
     auto bty = gi.getOutputBundle().getType();
     auto newop = rewriter.create<PlusArgsValueIntrinsicOp>(
-        gi.op.getLoc(), bty.getElementTypePreservingConst(0),
-        bty.getElementTypePreservingConst(1),
-        gi.getParamValue<StringAttr>("FORMAT"));
+        gi.op.getLoc(), bty.getElementType(size_t{0}),
+        bty.getElementType(size_t{1}), gi.getParamValue<StringAttr>("FORMAT"));
     rewriter.replaceOpWithNewOp<BundleCreateOp>(
         gi.op, bty, ValueRange({newop.getFound(), newop.getResult()}));
   }
@@ -80,7 +92,10 @@ public:
 
 class CirctClockGateConverter
     : public IntrinsicOpConverter<ClockGateIntrinsicOp> {
+class CirctClockGateConverter
+    : public IntrinsicOpConverter<ClockGateIntrinsicOp> {
 public:
+  using IntrinsicOpConverter::IntrinsicOpConverter;
   using IntrinsicOpConverter::IntrinsicOpConverter;
 
   bool check(GenericIntrinsic gi) override {
@@ -99,114 +114,28 @@ public:
   }
 };
 
-class CirctClockInverterConverter
-    : public IntrinsicOpConverter<ClockInverterIntrinsicOp> {
+class CirctClockInverterConverter : public IntrinsicConverter {
 public:
-  using IntrinsicOpConverter::IntrinsicOpConverter;
+  using IntrinsicConverter::IntrinsicConverter;
 
   bool check(GenericIntrinsic gi) override {
     return gi.hasNInputs(1) || gi.typedInput<ClockType>(0) ||
            gi.typedOutput<ClockType>() || gi.hasNParam(0);
   }
-};
-
-class CirctClockDividerConverter : public IntrinsicConverter {
-public:
-  using IntrinsicConverter::IntrinsicConverter;
-
-  bool check(GenericIntrinsic gi) override {
-    return gi.hasNInputs(1) || gi.typedInput<ClockType>(0) ||
-           gi.typedOutput<ClockType>() || gi.namedIntParam("POW_2") ||
-           gi.hasNParam(1);
-  }
 
   void convert(GenericIntrinsic gi, GenericIntrinsicOpAdaptor adaptor,
                PatternRewriter &rewriter) override {
-    auto pow2 =
-        gi.getParamValue<IntegerAttr>("POW_2").getValue().getZExtValue();
+    // TODO: As temporary accomodation, consider propagating name to op
+    // during intmodule->op conversion, as code previously materialized
+    // a wire to hold the name of the instance.
+    // In the future, input FIRRTL can just be "node clock_inv = ....".
+    rewriter.replaceOpWithNewOp<ClockInverterIntrinsicOp>(
+        gi.op, adaptor.getOperands()[0]);
 
-    auto pow2Attr = rewriter.getI64IntegerAttr(pow2);
-
-    rewriter.replaceOpWithNewOp<ClockDividerIntrinsicOp>(
-        gi.op, adaptor.getOperands()[0], pow2Attr);
-  }
-};
-
-template <typename OpTy>
-class CirctLTLBinaryConverter : public IntrinsicOpConverter<OpTy> {
-public:
-  using IntrinsicOpConverter<OpTy>::IntrinsicOpConverter;
-
-  bool check(GenericIntrinsic gi) override {
-    return gi.hasNInputs(2) || gi.sizedInput<UIntType>(0, 1) ||
-           gi.sizedInput<UIntType>(1, 1) || gi.sizedOutput<UIntType>(1) ||
-           gi.hasNParam(0);
-  }
-};
-
-template <typename OpTy>
-class CirctLTLUnaryConverter : public IntrinsicOpConverter<OpTy> {
-public:
-  using IntrinsicOpConverter<OpTy>::IntrinsicOpConverter;
-
-  bool check(GenericIntrinsic gi) override {
-    return gi.hasNInputs(1) || gi.sizedInput<UIntType>(0, 1) ||
-           gi.sizedOutput<UIntType>(1) || gi.hasNParam(0);
-  }
-};
-
-class CirctLTLDelayConverter : public IntrinsicConverter {
-public:
-  using IntrinsicConverter::IntrinsicConverter;
-
-  bool check(GenericIntrinsic gi) override {
-    return gi.hasNInputs(1) || gi.sizedInput<UIntType>(0, 1) ||
-           gi.sizedOutput<UIntType>(1) || gi.namedIntParam("delay") ||
-           gi.namedIntParam("length", true) || gi.hasNParam(1, 1);
-  }
-
-  void convert(GenericIntrinsic gi, GenericIntrinsicOpAdaptor adaptor,
-               PatternRewriter &rewriter) override {
-    auto getI64Attr = [&](IntegerAttr val) {
-      if (!val)
-        return IntegerAttr();
-      return rewriter.getI64IntegerAttr(val.getValue().getZExtValue());
-    };
-    auto delay = getI64Attr(gi.getParamValue<IntegerAttr>("delay"));
-    auto length = getI64Attr(gi.getParamValue<IntegerAttr>("length"));
-    rewriter.replaceOpWithNewOp<LTLDelayIntrinsicOp>(
-        gi.op, gi.op.getResultTypes(), adaptor.getOperands()[0], delay, length);
-  }
-};
-
-class CirctLTLClockConverter
-    : public IntrinsicOpConverter<LTLClockIntrinsicOp> {
-public:
-  using IntrinsicOpConverter::IntrinsicOpConverter;
-
-  bool check(GenericIntrinsic gi) override {
-    return gi.hasNInputs(2) || gi.sizedInput<UIntType>(0, 1) ||
-           gi.typedInput<ClockType>(1) || gi.sizedOutput<UIntType>(1) ||
-           gi.hasNParam(0);
-  }
-};
-
-template <class Op>
-class CirctVerifConverter : public IntrinsicConverter {
-public:
-  using IntrinsicConverter::IntrinsicConverter;
-
-  bool check(GenericIntrinsic gi) override {
-    return gi.hasNInputs(1) || gi.sizedInput<UIntType>(0, 1) ||
-           gi.namedParam("label", true) || gi.hasNParam(0, 1) ||
-           gi.hasNoOutput();
-  }
-
-  void convert(GenericIntrinsic gi, GenericIntrinsicOpAdaptor adaptor,
-               PatternRewriter &rewriter) override {
-    auto label = gi.getParamValue<StringAttr>("label");
-
-    rewriter.replaceOpWithNewOp<Op>(gi.op, adaptor.getOperands()[0], label);
+    // auto name = inst.getInstanceName();
+    // Value outWire = builder.create<WireOp>(out.getType(), name).getResult();
+    // builder.create<StrictConnectOp>(outWire, out);
+    // inst.getResult(1).replaceAllUsesWith(outWire);
   }
 };
 
@@ -230,6 +159,115 @@ class CirctMux4CellConverter
   }
 };
 
+template <typename OpTy>
+class CirctLTLBinaryConverter : public IntrinsicOpConverter<OpTy> {
+public:
+  using IntrinsicOpConverter<OpTy>::IntrinsicOpConverter;
+  using IntrinsicOpConverter<OpTy>::IntrinsicOpConverter;
+
+  bool check(GenericIntrinsic gi) override {
+    return gi.hasNInputs(2) || gi.sizedInput<UIntType>(0, 1) ||
+           gi.sizedInput<UIntType>(1, 1) || gi.sizedOutput<UIntType>(1) ||
+           gi.hasNParam(0);
+  bool check(GenericIntrinsic gi) override {
+    return gi.hasNInputs(2) || gi.sizedInput<UIntType>(0, 1) ||
+           gi.sizedInput<UIntType>(1, 1) || gi.sizedOutput<UIntType>(1) ||
+           gi.hasNParam(0);
+  }
+};
+
+template <typename OpTy>
+class CirctLTLUnaryConverter : public IntrinsicOpConverter<OpTy> {
+};
+
+template <typename OpTy>
+class CirctLTLUnaryConverter : public IntrinsicOpConverter<OpTy> {
+public:
+  using IntrinsicOpConverter<OpTy>::IntrinsicOpConverter;
+  using IntrinsicOpConverter<OpTy>::IntrinsicOpConverter;
+
+  bool check(GenericIntrinsic gi) override {
+    return gi.hasNInputs(1) || gi.sizedInput<UIntType>(0, 1) ||
+           gi.sizedOutput<UIntType>(1) || gi.hasNParam(0);
+  bool check(GenericIntrinsic gi) override {
+    return gi.hasNInputs(1) || gi.sizedInput<UIntType>(0, 1) ||
+           gi.sizedOutput<UIntType>(1) || gi.hasNParam(0);
+  }
+};
+
+class CirctLTLDelayConverter : public IntrinsicConverter {
+public:
+  using IntrinsicConverter::IntrinsicConverter;
+
+  bool check(GenericIntrinsic gi) override {
+    return gi.hasNInputs(1) || gi.sizedInput<UIntType>(0, 1) ||
+           gi.sizedOutput<UIntType>(1) || gi.hasNParam(1, 2) ||
+           gi.namedIntParam("delay") || gi.namedIntParam("length", true);
+  }
+
+  void convert(GenericIntrinsic gi, GenericIntrinsicOpAdaptor adaptor,
+               PatternRewriter &rewriter) override {
+    auto getI64Attr = [&](IntegerAttr val) {
+      if (!val)
+        return IntegerAttr();
+      return rewriter.getI64IntegerAttr(val.getValue().getZExtValue());
+    };
+    auto delay = getI64Attr(gi.getParamValue<IntegerAttr>("delay"));
+    auto length = getI64Attr(gi.getParamValue<IntegerAttr>("length"));
+    rewriter.replaceOpWithNewOp<LTLDelayIntrinsicOp>(
+        gi.op, gi.op.getResultTypes(), adaptor.getOperands()[0], delay, length);
+  void convert(GenericIntrinsic gi, GenericIntrinsicOpAdaptor adaptor,
+               PatternRewriter &rewriter) override {
+    auto getI64Attr = [&](IntegerAttr val) {
+      if (!val)
+        return IntegerAttr();
+      return rewriter.getI64IntegerAttr(val.getValue().getZExtValue());
+    };
+    auto delay = getI64Attr(gi.getParamValue<IntegerAttr>("delay"));
+    auto length = getI64Attr(gi.getParamValue<IntegerAttr>("length"));
+    rewriter.replaceOpWithNewOp<LTLDelayIntrinsicOp>(
+        gi.op, gi.op.getResultTypes(), adaptor.getOperands()[0], delay, length);
+  }
+};
+
+class CirctLTLClockConverter
+    : public IntrinsicOpConverter<LTLClockIntrinsicOp> {
+class CirctLTLClockConverter
+    : public IntrinsicOpConverter<LTLClockIntrinsicOp> {
+public:
+  using IntrinsicOpConverter::IntrinsicOpConverter;
+  using IntrinsicOpConverter::IntrinsicOpConverter;
+
+  bool check(GenericIntrinsic gi) override {
+    return gi.hasNInputs(2) || gi.sizedInput<UIntType>(0, 1) ||
+           gi.typedInput<ClockType>(1) || gi.sizedOutput<UIntType>(1) ||
+           gi.hasNParam(0);
+  bool check(GenericIntrinsic gi) override {
+    return gi.hasNInputs(2) || gi.sizedInput<UIntType>(0, 1) ||
+           gi.typedInput<ClockType>(1) || gi.sizedOutput<UIntType>(1) ||
+           gi.hasNParam(0);
+  }
+};
+
+template <class Op>
+class CirctVerifConverter : public IntrinsicConverter {
+public:
+  using IntrinsicConverter::IntrinsicConverter;
+
+  bool check(GenericIntrinsic gi) override {
+    return gi.hasNInputs(1) || gi.sizedInput<UIntType>(0, 1) ||
+           gi.hasNParam(0, 1) || gi.namedParam("label", true) ||
+           gi.hasNoOutput();
+  }
+
+  void convert(GenericIntrinsic gi, GenericIntrinsicOpAdaptor adaptor,
+               PatternRewriter &rewriter) override {
+    auto label = gi.getParamValue<StringAttr>("label");
+
+    rewriter.replaceOpWithNewOp<Op>(gi.op, adaptor.getOperands()[0], label);
+  }
+};
+
 class CirctHasBeenResetConverter
     : public IntrinsicOpConverter<HasBeenResetIntrinsicOp> {
 public:
@@ -245,6 +283,7 @@ public:
 class CirctProbeConverter : public IntrinsicOpConverter<FPGAProbeIntrinsicOp> {
 public:
   using IntrinsicOpConverter::IntrinsicOpConverter;
+  using IntrinsicOpConverter::IntrinsicOpConverter;
 
   bool check(GenericIntrinsic gi) override {
     return gi.hasNInputs(2) || gi.typedInput<ClockType>(1) || gi.hasNParam(0) ||
@@ -259,11 +298,10 @@ public:
 
   bool check(GenericIntrinsic gi) override {
     return gi.typedInput<ClockType>(0) || gi.sizedInput<UIntType>(1, 1) ||
-           gi.sizedInput<UIntType>(2, 1) ||
+           gi.sizedInput<UIntType>(2, 1) || gi.hasNParam(0, 3) ||
            gi.namedParam("format", /*optional=*/true) ||
            gi.namedParam("label", /*optional=*/true) ||
-           gi.namedParam("guards", /*optional=*/true) || gi.hasNParam(0, 3) ||
-           gi.hasNoOutput();
+           gi.namedParam("guards", /*optional=*/true) || gi.hasNoOutput();
   }
 
   void convert(GenericIntrinsic gi, GenericIntrinsicOpAdaptor adaptor,
@@ -275,10 +313,19 @@ public:
     auto clock = adaptor.getOperands()[0];
     auto predicate = adaptor.getOperands()[1];
     auto enable = adaptor.getOperands()[2];
+    auto clock = adaptor.getOperands()[0];
+    auto predicate = adaptor.getOperands()[1];
+    auto enable = adaptor.getOperands()[2];
 
     auto substitutions = adaptor.getOperands().drop_front(3);
     auto name = label ? label.strref() : "";
+    auto substitutions = adaptor.getOperands().drop_front(3);
+    auto name = label ? label.strref() : "";
     // Message is not optional, so provide empty string if not present.
+    auto message = format ? format : rewriter.getStringAttr("");
+    auto op = rewriter.template replaceOpWithNewOp<OpTy>(
+        gi.op, clock, predicate, enable, message, substitutions, name,
+        /*isConcurrent=*/true);
     auto message = format ? format : rewriter.getStringAttr("");
     auto op = rewriter.template replaceOpWithNewOp<OpTy>(
         gi.op, clock, predicate, enable, message, substitutions, name,
@@ -290,8 +337,18 @@ public:
       rewriter.startOpModification(op);
       op->setAttr("guards", rewriter.getStrArrayAttr(guardStrings));
       rewriter.finalizeOpModification(op);
+      guards.strref().split(guardStrings, ';', /*MaxSplit=*/-1,
+                            /*KeepEmpty=*/false);
+      rewriter.startOpModification(op);
+      op->setAttr("guards", rewriter.getStrArrayAttr(guardStrings));
+      rewriter.finalizeOpModification(op);
     }
 
+    if constexpr (ifElseFatal) {
+      rewriter.startOpModification(op);
+      op->setAttr("format", rewriter.getStringAttr("ifElseFatal"));
+      rewriter.finalizeOpModification(op);
+    }
     if constexpr (ifElseFatal) {
       rewriter.startOpModification(op);
       op->setAttr("format", rewriter.getStringAttr("ifElseFatal"));
@@ -307,9 +364,9 @@ public:
   bool check(GenericIntrinsic gi) override {
     return gi.hasNInputs(3) || gi.hasNoOutput() ||
            gi.typedInput<ClockType>(0) || gi.sizedInput<UIntType>(1, 1) ||
-           gi.sizedInput<UIntType>(2, 1) ||
+           gi.sizedInput<UIntType>(2, 1) || gi.hasNParam(0, 2) ||
            gi.namedParam("label", /*optional=*/true) ||
-           gi.namedParam("guards", /*optional=*/true) || gi.hasNParam(0, 2);
+           gi.namedParam("guards", /*optional=*/true);
   }
 
   void convert(GenericIntrinsic gi, GenericIntrinsicOpAdaptor adaptor,
@@ -320,9 +377,17 @@ public:
     auto clock = adaptor.getOperands()[0];
     auto predicate = adaptor.getOperands()[1];
     auto enable = adaptor.getOperands()[2];
+    auto clock = adaptor.getOperands()[0];
+    auto predicate = adaptor.getOperands()[1];
+    auto enable = adaptor.getOperands()[2];
 
     auto name = label ? label.strref() : "";
+    auto name = label ? label.strref() : "";
     // Empty message string for cover, only 'name' / label.
+    auto message = rewriter.getStringAttr("");
+    auto op = rewriter.replaceOpWithNewOp<CoverOp>(
+        gi.op, clock, predicate, enable, message, ValueRange{}, name,
+        /*isConcurrent=*/true);
     auto message = rewriter.getStringAttr("");
     auto op = rewriter.replaceOpWithNewOp<CoverOp>(
         gi.op, clock, predicate, enable, message, ValueRange{}, name,
@@ -335,26 +400,26 @@ public:
       op->setAttr("guards", rewriter.getStrArrayAttr(guardStrings));
       rewriter.finalizeOpModification(op);
     }
+      guards.strref().split(guardStrings, ';', /*MaxSplit=*/-1,
+                            /*KeepEmpty=*/false);
+      rewriter.startOpModification(op);
+      op->setAttr("guards", rewriter.getStrArrayAttr(guardStrings));
+      rewriter.finalizeOpModification(op);
+    }
   }
 };
 
+/*
 class CirctUnclockedAssumeConverter : public IntrinsicConverter {
 public:
   using IntrinsicConverter::IntrinsicConverter;
 
-  bool check(GenericIntrinsic gi) override {
-    return gi.sizedInput<UIntType>(0, 1) || gi.sizedInput<UIntType>(1, 1) ||
-           gi.namedParam("format", /*optional=*/true) ||
-           gi.namedParam("label", /*optional=*/true) ||
-           gi.namedParam("guards", /*optional=*/true) || gi.hasNParam(0, 3) ||
-           gi.hasNoOutput();
-  }
-
-  void convert(GenericIntrinsic gi, GenericIntrinsicOpAdaptor adaptor,
-               PatternRewriter &rewriter) override {
-    auto format = gi.getParamValue<StringAttr>("format");
-    auto label = gi.getParamValue<StringAttr>("label");
-    auto guards = gi.getParamValue<StringAttr>("guards");
+  LogicalResult convert(InstanceOp inst) override {
+    ImplicitLocOpBuilder builder(inst.getLoc(), inst);
+    auto params = mod.getParameters();
+    auto format = getNamedParam(params, "format");
+    auto label = getNamedParam(params, "label");
+    auto guards = getNamedParam(params, "guards");
 
     auto predicate = adaptor.getOperands()[0];
     auto enable = adaptor.getOperands()[1];
@@ -375,6 +440,7 @@ public:
     }
   }
 };
+*/
 
 } // namespace
 
@@ -385,11 +451,18 @@ public:
 namespace {
 struct LowerIntrinsicsPass : public LowerIntrinsicsBase<LowerIntrinsicsPass> {
   LogicalResult initialize(MLIRContext *context) override;
+  LogicalResult initialize(MLIRContext *context) override;
   void runOnOperation() override;
+
+  std::shared_ptr<IntrinsicLowerings> lowering;
 
   std::shared_ptr<IntrinsicLowerings> lowering;
 };
 } // namespace
+
+/// Initialize the conversions for use during execution.
+LogicalResult LowerIntrinsicsPass::initialize(MLIRContext *context) {
+  IntrinsicLowerings lowering(context);
 
 /// Initialize the conversions for use during execution.
 LogicalResult LowerIntrinsicsPass::initialize(MLIRContext *context) {
@@ -404,8 +477,11 @@ LogicalResult LowerIntrinsicsPass::initialize(MLIRContext *context) {
   lowering.add<CirctClockGateConverter>("circt.clock_gate", "circt_clock_gate");
   lowering.add<CirctClockInverterConverter>("circt.clock_inv",
                                             "circt_clock_inv");
-  lowering.add<CirctClockDividerConverter>("circt.clock_div",
-                                           "circt_clock_div");
+  lowering.add<CirctMux2CellConverter>("circt.mux2cell", "circt_mux2cell");
+  lowering.add<CirctMux4CellConverter>("circt.mux4cell", "circt_mux4cell");
+  lowering.add<CirctHasBeenResetConverter>("circt.has_been_reset",
+                                           "circt_has_been_reset");
+
   lowering.add<CirctLTLBinaryConverter<LTLAndIntrinsicOp>>("circt.ltl.and",
                                                            "circt_ltl_and");
   lowering.add<CirctLTLBinaryConverter<LTLOrIntrinsicOp>>("circt.ltl.or",
@@ -424,16 +500,14 @@ LogicalResult LowerIntrinsicsPass::initialize(MLIRContext *context) {
   lowering.add<CirctLTLDelayConverter>("circt.ltl.delay", "circt_ltl_delay");
   lowering.add<CirctLTLClockConverter>("circt.ltl.clock", "circt_ltl_clock");
 
+
   lowering.add<CirctVerifConverter<VerifAssertIntrinsicOp>>(
       "circt.verif.assert", "circt_verif_assert");
   lowering.add<CirctVerifConverter<VerifAssumeIntrinsicOp>>(
       "circt.verif.assume", "circt_verif_assume");
   lowering.add<CirctVerifConverter<VerifCoverIntrinsicOp>>("circt.verif.cover",
                                                            "circt_verif_cover");
-  lowering.add<CirctMux2CellConverter>("circt.mux2cell", "circt_mux2cell");
-  lowering.add<CirctMux4CellConverter>("circt.mux4cell", "circt_mux4cell");
-  lowering.add<CirctHasBeenResetConverter>("circt.has_been_reset",
-                                           "circt_has_been_reset");
+
   lowering.add<CirctProbeConverter>("circt.fpga_probe", "circt_fpga_probe");
   lowering.add<CirctAssertConverter<AssertOp>>("circt.chisel_assert",
                                                "circt_chisel_assert");
@@ -442,8 +516,6 @@ LogicalResult LowerIntrinsicsPass::initialize(MLIRContext *context) {
   lowering.add<CirctAssertConverter<AssumeOp>>("circt.chisel_assume",
                                                "circt_chisel_assume");
   lowering.add<CirctCoverConverter>("circt.chisel_cover", "circt_chisel_cover");
-  lowering.add<CirctUnclockedAssumeConverter>("circt.unclocked_assume",
-                                              "circt_unclocked_assume");
 
   this->lowering = std::make_shared<IntrinsicLowerings>(std::move(lowering));
   return success();
@@ -456,6 +528,8 @@ void LowerIntrinsicsPass::runOnOperation() {
 }
 
 /// This is the pass constructor.
+std::unique_ptr<mlir::Pass> circt::firrtl::createLowerIntrinsicsPass() {
+  return std::make_unique<LowerIntrinsicsPass>();
 std::unique_ptr<mlir::Pass> circt::firrtl::createLowerIntrinsicsPass() {
   return std::make_unique<LowerIntrinsicsPass>();
 }

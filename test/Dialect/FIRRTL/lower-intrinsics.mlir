@@ -1,4 +1,10 @@
+<<<<<<< HEAD
 // RUN: circt-opt --pass-pipeline='builtin.module(firrtl.circuit(firrtl.module(firrtl-lower-intrinsics)))' %s | FileCheck %s --check-prefixes=CHECK --implicit-check-not firrtl.int.generic
+=======
+// Test intmodule -> ops + LowerIntrinsics combined, to start with.
+// RUN: circt-opt --pass-pipeline='builtin.module(firrtl.circuit(firrtl-lower-intmodules,firrtl.module(firrtl-lower-intrinsics)))' %s | FileCheck %s --check-prefixes=CHECK,CHECK-NOEICG
+// RUN: circt-opt --pass-pipeline='builtin.module(firrtl.circuit(firrtl-lower-intmodules{fixup-eicg-wrapper},firrtl.module(firrtl-lower-intrinsics)))' %s | FileCheck %s --check-prefixes=CHECK,CHECK-EICG
+>>>>>>> c5f43307f ([FIRRTL] LowerIntrinsics: rewrite to lower generic ops.)
 
 // CHECK-LABEL: "Foo"
 firrtl.circuit "Foo" {
@@ -132,10 +138,17 @@ firrtl.circuit "Foo" {
     // CHECK-SAME: name = "label for cover"
     firrtl.int.generic "circt_chisel_cover" <label: none = "label for cover"> %clock, %cond, %enable : (!firrtl.clock, !firrtl.uint<1>, !firrtl.uint<1>) -> ()
 
+<<<<<<< HEAD
     // CHECK: firrtl.int.unclocked_assume %{{.+}}, %{{.+}}, "text: %d"(
     // CHECK-SAME: guards = ["MACRO_GUARD", "ASDF"]
     // CHECK-SAME: name = "label for unr"
     firrtl.int.generic "circt.unclocked_assume" <format: none = "text: %d", label: none = "label for unr", guards: none = "MACRO_GUARD;ASDF"> %cond, %enable, %enable : (!firrtl.uint<1>, !firrtl.uint<1>, !firrtl.uint<1>) -> ()
+=======
+    // %unr_predicate, %unr_enable, %unr_val = firrtl.instance unr interesting_name @UnclockedAssume(in predicate: !firrtl.uint<1>, in enable: !firrtl.uint<1>, in val: !firrtl.uint<1>)
+    // firrtl.strictconnect %unr_predicate, %cond : !firrtl.uint<1>
+    // firrtl.strictconnect %unr_enable, %enable : !firrtl.uint<1>
+    // firrtl.strictconnect %unr_val, %enable : !firrtl.uint<1>
+>>>>>>> c5f43307f ([FIRRTL] LowerIntrinsics: rewrite to lower generic ops.)
   }
 
   // CHECK-LABEL: firrtl.module private @ProbeIntrinsicTest
