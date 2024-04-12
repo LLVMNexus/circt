@@ -77,6 +77,11 @@ def ModuleType : DialectType<HWDialect,
     CPred<"isa<circt::hw::ModuleType>($_self)">,
           "a module", "::circt::hw::ModuleType">;
 
+// A handle to refer to circt::hw::ModuleType in ODS.
+def HWFunctionType : DialectType<HWDialect,
+    CPred<"isa<circt::hw::FunctionType>($_self)">,
+          "a function", "::circt::hw::ModuleType">;
+
 // A handle to refer to circt::hw::StringType in ODS.
 def HWStringType :
     DialectType<HWDialect,

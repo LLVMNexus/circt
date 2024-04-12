@@ -79,6 +79,7 @@ class HWSymbolCache;
 class ParamDeclAttr;
 class TypedeclOp;
 class ModuleType;
+class HWFunctionType;
 
 namespace detail {
 

@@ -169,6 +169,56 @@ def UnclockedAssumeIntrinsicOp : FIRRTLOp<"int.unclocked_assume", []> {
 }
 
 //===----------------------------------------------------------------------===//
+// DPI intrinsics
+//===----------------------------------------------------------------------===//
+
+def DPIImportAndCallIntrinsicOp : FIRRTLOp<"int.dpi.import_and_call",
+    [HasCustomSSAName]> {
+  let summary =
+    [{Intrinsic for importing and calling DPI functions. This should be
+      deprecated once DPI got in to firrt-spec.}];
+
+  // TODO: Add a reset and enable?
+  let arguments = (ins StrAttr:$function_name, 
+                       NonConstClockType:$clock,
+                       Variadic<PassiveType>:$inputs);
+  let results = (outs Variadic<PassiveType>:$results);
+  let assemblyFormat = "$function_name  $clock `(`$inputs `)` attr-dict `:` functional-type($inputs, $results)";
+}
+
+// def DPIImportOp : FIRRTLOp<"dpi.import",
+//     [Symbol, DeclareOpInterfaceMethods<PortList>]> {
+//   let summary = "Test for 'x";
+//   let description = [{}];
+// 
+//   let arguments = (ins FlatSymbolRefAttr:$sym_name,
+//                        StrAttr: $function_name, 
+//                        DenseBoolArrayAttr:$argDirections,
+//                        ArrayRefAttr:$argLocations,
+//                        ArrayRefAttr:$argNames,
+//                        ArrayRefAttr:$argTypes);
+//   
+//   let results = (outs);
+//   // TODO: Implement a custom prenter.
+//   let assemblyFormat = "$sym_name $function_name attr-dict";
+// }
+
+// def DPICallOp : FIRRTLOp<"dpi.call",
+//     [DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
+//   let summary = "Test for 'x";
+//   let description = [{}];
+// 
+//   let arguments = (ins FlatSymbolRefAttr:$sym_name,
+//                        StrAttr: $function_name, 
+//                        DenseBoolArrayAttr:$argDirections,
+//                        ArrayRefAttr:$argLocations,
+//                        ArrayRefAttr:$argNames,
+//                        ArrayRefAttr:$argTypes);
+//   
+//   let results = (outs);
+// }
+
+//===----------------------------------------------------------------------===//
 // Other intrinsics
 //===----------------------------------------------------------------------===//
 
