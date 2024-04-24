@@ -389,3 +389,7 @@ hw.module @XMRRefOp() {
   // CHECK: %1 = sv.xmr.ref @ref2 ".x.y.z[42]" : !hw.inout<i8>
   %1 = sv.xmr.ref @ref2 ".x.y.z[42]" : !hw.inout<i8>
 }
+
+// Functions.
+// CHECK: sv.function private @foo(in %in_0 : i2, in %in_1 : i2, out out_0 : i1)
+sv.function private @foo(in %in_0 : i2, in %in_1 : i2, out out_0 : i1)
