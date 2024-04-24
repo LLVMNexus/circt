@@ -50,6 +50,11 @@ void printModuleSignature(OpAsmPrinter &p, Operation *op,
 ParseResult parseModuleSignature(OpAsmParser &parser,
                                  SmallVectorImpl<PortParse> &args,
                                  TypeAttr &modType);
+
+void printModuleSignatureNew(OpAsmPrinter &p, Region &body,
+                             hw::ModuleType modType, 
+                             ArrayRef<Attribute> portAttrs,
+                             ArrayRef<Location> locAttrs);
 void printModuleSignatureNew(OpAsmPrinter &p, HWModuleLike op);
 
 } // namespace module_like_impl

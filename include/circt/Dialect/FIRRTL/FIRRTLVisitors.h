@@ -53,7 +53,7 @@ public:
             LTLDelayIntrinsicOp, LTLConcatIntrinsicOp, LTLNotIntrinsicOp,
             LTLImplicationIntrinsicOp, LTLEventuallyIntrinsicOp,
             LTLClockIntrinsicOp, LTLDisableIntrinsicOp, Mux2CellIntrinsicOp,
-            Mux4CellIntrinsicOp, HasBeenResetIntrinsicOp,
+            Mux4CellIntrinsicOp, HasBeenResetIntrinsicOp, DPIImportAndCallIntrinsicOp,
             // Miscellaneous.
             BitsPrimOp, HeadPrimOp, MuxPrimOp, PadPrimOp, ShlPrimOp, ShrPrimOp,
             TailPrimOp, VerbatimExprOp, HWStructCastOp, BitCastOp, RefSendOp,

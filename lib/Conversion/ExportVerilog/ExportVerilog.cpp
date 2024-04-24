@@ -191,7 +191,7 @@ StringRef ExportVerilog::getSymOpName(Operation *symOp) {
     return attr.getValue();
   return TypeSwitch<Operation *, StringRef>(symOp)
       .Case<HWModuleOp, HWModuleExternOp, HWModuleGeneratedOp,
-            sv::FunctionDPIDeclareOp>(
+            sv::FunctionDPIDeclareOp, sv::FunctionOp>(
           [](Operation *op) { return getVerilogModuleName(op); })
       .Case<InterfaceOp>([&](InterfaceOp op) {
         return getVerilogModuleNameAttr(op).getValue();
@@ -3840,6 +3840,7 @@ private:
   LogicalResult visitVerif(verif::CoverOp op);
 
   LogicalResult visitSV(FunctionDPIImportOp op);
+  LogicalResult visitSV(FunctionOp op);
   LogicalResult visitSV(FunctionCallProceduralOp op);
 
 public:
@@ -4138,8 +4139,8 @@ LogicalResult StmtEmitter::visitStmt(TypedeclOp op) {
 LogicalResult StmtEmitter::visitSV(FunctionCallProceduralOp op) {
   startStatement();
 
-  auto callee = cast<FunctionDPIDeclareOp>(
-      state.symbolCache.getDefinition(op.getCalleeAttr()));
+  auto callee =
+      cast<FunctionOp>(state.symbolCache.getDefinition(op.getCalleeAttr()));
 
   ps << PPExtString(getSymOpName(callee)) << "(";
 
@@ -4166,12 +4167,26 @@ LogicalResult StmtEmitter::visitSV(FunctionCallProceduralOp op) {
   return success();
 }
 
+LogicalResult StmtEmitter::visitSV(FunctionOp op) {
+  // Nothing to emit for a declaration.
+  if (op.isDeclaration())
+    return success();
+  startStatement();
+
+  ps << "function";
+  auto type = op.getExplicitReturnType();
+
+  // Unsupported now.
+  return op.emitError() << "emission unsupported";
+}
+
 LogicalResult StmtEmitter::visitSV(FunctionDPIImportOp importOp) {
   startStatement();
 
   ps << "import \"DPI-C\" function void ";
-  auto op = cast<FunctionDPIDeclareOp>(
+  auto op = cast<FunctionOp>(
       state.symbolCache.getDefinition(importOp.getCalleeAttr()));
+  assert(op.isDeclaration() && "function must be a declaration");
   ps << PPExtString(getSymOpName(op));
   ps << "(";
 
@@ -4208,7 +4223,6 @@ LogicalResult StmtEmitter::visitSV(FunctionDPIImportOp importOp) {
 
   ps << PP::newline << ");" << PP::newline;
   setPendingNewline();
-  return success();
   return success();
 }
 
@@ -6424,7 +6438,7 @@ void SharedEmitterState::gatherFiles(bool separateModules) {
             separateFile(op);
           }
         })
-        .Case<MacroDeclOp, FunctionDPIDeclareOp>([&](auto op) {
+        .Case<MacroDeclOp, FunctionDPIDeclareOp, sv::FunctionOp>([&](auto op) {
           symbolCache.addDefinition(op.getSymNameAttr(), op);
         })
         .Case<om::ClassLike>([&](auto op) {

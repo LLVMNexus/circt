@@ -16,12 +16,14 @@
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/HW/HWSymCache.h"
 #include "circt/Dialect/HW/HWTypes.h"
+#include "circt/Dialect/HW/ModuleImplementation.h"
 #include "circt/Dialect/SV/SVAttributes.h"
 #include "circt/Support/CustomDirectiveImpl.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/Interfaces/FunctionImplementation.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -2120,6 +2122,49 @@ LogicalResult
 FunctionDPIImportOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   // TODO: Fill
   return success();
+}
+
+ParseResult FunctionOp::parse(OpAsmParser &parser, OperationState &result) {
+  return failure();
+}
+
+Type FunctionOp::getExplicitReturnType() {
+  auto ports = getModuleType().getPorts();
+  auto portsAttr = getPerPortAttrsAttr().getAsRange<DictionaryAttr>();
+  for (auto [port, portAttr] : llvm::zip(ports, portsAttr)) {
+    if (port.dir != hw::ModulePort::Output)
+      continue;
+    if (portAttr.getAs<UnitAttr>("sv.function.explicit_return"))
+      return port.type;
+  }
+  return {};
+}
+
+void FunctionOp::print(OpAsmPrinter &p) {
+  FunctionOp op = *this;
+  // Print the operation and the function name.
+  auto funcName =
+      op->getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName())
+          .getValue();
+  p << ' ';
+
+  StringRef visibilityAttrName = SymbolTable::getVisibilityAttrName();
+  if (auto visibility = op->getAttrOfType<StringAttr>(visibilityAttrName))
+    p << visibility.getValue() << ' ';
+  p.printSymbolName(funcName);
+  hw::module_like_impl::printModuleSignatureNew(p, op.getBody(),
+                                                op.getModuleType(), {},
+                                                /*FIXME*/ {});
+
+  mlir::function_interface_impl::printFunctionAttributes(
+      p, op, {visibilityAttrName, getModuleTypeAttrName()});
+  // Print the body if this is not an external function.
+  Region &body = op->getRegion(0);
+  if (!body.empty()) {
+    p << ' ';
+    p.printRegion(body, /*printEntryBlockArgs=*/false,
+                  /*printBlockTerminators=*/true);
+  }
 }
 
 //===----------------------------------------------------------------------===//

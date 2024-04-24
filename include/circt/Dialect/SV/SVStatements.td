@@ -934,6 +934,48 @@ def FunctionDPIDeclareOp : SVOp<"function.dpi.decl", [IsolatedFromAbove, Symbol,
   }];
 }
 
+def FunctionOp : SVOp<"function", [IsolatedFromAbove, Symbol,
+      FunctionOpInterface, HasParent<"mlir::ModuleOp">]> {
+  let summary = "A System Verilog function";
+
+  let arguments = (ins 
+    SymbolNameAttr:$sym_name,
+    TypeAttrOf<ModuleType>:$module_type,
+    OptionalAttr<DictArrayAttr>:$per_port_attrs,
+    OptionalAttr<LocationArrayAttr>:$ports_loc
+  );
+
+  // let assemblyFormat =
+  //    "$sym_name (`function_name` $verilogName^)? attr-dict `:` $module_type $body";
+
+  let results = (outs);
+  let regions = (region AnyRegion:$body);
+
+  let hasCustomAssemblyFormat = 1;
+  let extraClassDeclaration = [{
+    mlir::FunctionType getFunctionType() {
+      return getModuleType().getFuncType();
+    }
+
+    void setFunctionTypeAttr(mlir::TypeAttr mlirType) {
+      setModuleType(cast<hw::ModuleType>(mlirType.getValue()));
+    }
+
+    /// Returns the argument types of this function.
+    ArrayRef<Type> getArgumentTypes() { return getFunctionType().getInputs(); }
+
+    /// Returns the result types of this function.
+    ArrayRef<Type> getResultTypes() { return getFunctionType().getResults(); }
+
+    SmallVector<Location> getAllPortLocs();
+
+    Type getExplicitReturnType();
+
+    ::mlir::Region *getCallableRegion() { return nullptr; }
+    bool isDeclaration() { return isExternal(); }
+  }];
+}
+
 def FunctionCallProceduralOp : SVOp<"function.call.procedural", [CallOpInterface, 
   DeclareOpInterfaceMethods<SymbolUserOpInterface>, ProceduralOp]> {
   let summary = "Simulation failure condition";

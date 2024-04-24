@@ -391,20 +391,21 @@ static const char *directionAsString(ModulePort::Direction dir) {
   abort();
   return "unknown";
 }
-
 void module_like_impl::printModuleSignatureNew(OpAsmPrinter &p,
-                                               HWModuleLike op) {
+                                               hw::HWModuleLike op) {
+  module_like_impl::printModuleSignatureNew(
+      p, op.getModuleBody(), op.getHWModuleType(), op.getAllPortAttrs(),
+      op.getAllPortLocs());
+}
 
-  Region &body = op.getModuleBody();
+void module_like_impl::printModuleSignatureNew(OpAsmPrinter &p, Region &body,
+                                               hw::ModuleType modType,
+                                               ArrayRef<Attribute> portAttrs,
+                                               ArrayRef<Location> locAttrs) {
   bool isExternal = body.empty();
   SmallString<32> resultNameStr;
   mlir::OpPrintingFlags flags;
   unsigned curArg = 0;
-
-  auto modType = op.getHWModuleType();
-  auto portAttrs = op.getAllPortAttrs();
-  auto locAttrs = op.getAllPortLocs();
-
   p << '(';
   for (auto [i, port] : llvm::enumerate(modType.getPorts())) {
     if (i > 0)
