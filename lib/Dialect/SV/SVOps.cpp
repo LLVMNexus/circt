@@ -2125,7 +2125,77 @@ FunctionDPIImportOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
 }
 
 ParseResult FunctionOp::parse(OpAsmParser &parser, OperationState &result) {
-  return failure();
+  auto builder = parser.getBuilder();
+  // Parse visibility.
+  (void)mlir::impl::parseOptionalVisibilityKeyword(parser, result.attributes);
+
+  // Parse the name as a symbol.
+  StringAttr nameAttr;
+  if (parser.parseSymbolName(nameAttr, SymbolTable::getSymbolAttrName(),
+                             result.attributes))
+    return failure();
+
+  SmallVector<hw::module_like_impl::PortParse> ports;
+  TypeAttr modType;
+  if (failed(
+          hw::module_like_impl::parseModuleSignature(parser, ports, modType)))
+    return failure();
+
+  result.addAttribute(FunctionOp::getModuleTypeAttrName(result.name), modType);
+
+  // Convert the specified array of dictionary attrs (which may have null
+  // entries) to an ArrayAttr of dictionaries.
+  SmallVector<Attribute> attrs;
+  for (auto &port : ports)
+    attrs.push_back(port.attrs ? port.attrs : builder.getDictionaryAttr({}));
+
+  result.addAttribute(FunctionOp::getPerPortAttrsAttrName(result.name),
+                      builder.getArrayAttr(attrs));
+
+  // Parse the attribute dict.
+  if (failed(parser.parseOptionalAttrDictWithKeyword(result.attributes)))
+    return failure();
+
+  // Add the entry block arguments.
+  SmallVector<OpAsmParser::Argument, 4> entryArgs;
+  for (auto &port : ports)
+    if (port.direction != hw::ModulePort::Direction::Output)
+      entryArgs.push_back(port);
+
+  // Parse the optional function body. The printer will not print the body if
+  // its empty, so disallow parsing of empty body in the parser.
+  auto *body = result.addRegion();
+  llvm::SMLoc loc = parser.getCurrentLocation();
+
+  mlir::OptionalParseResult parseResult =
+      parser.parseOptionalRegion(*body, entryArgs,
+                                 /*enableNameShadowing=*/false);
+  if (parseResult.has_value()) {
+    if (failed(*parseResult))
+      return failure();
+    // Function body was parsed, make sure its not empty.
+    if (body->empty())
+      return parser.emitError(loc, "expected non-empty function body");
+  }
+
+  return success();
+}
+
+void FunctionOp::getAsmBlockArgumentNames(mlir::Region &region,
+                                          mlir::OpAsmSetValueNameFn setNameFn) {
+  if (region.empty())
+    return;
+  // Assign port names to the bbargs.
+  auto func = cast<FunctionOp>(region.getParentOp());
+
+  auto *block = &region.front();
+  llvm::errs() << func.getModuleType() << " "<< block->getNumArguments() << "\n";
+
+  auto names = func.getModuleType().getInputNames();
+  for (size_t i = 0, e = block->getNumArguments(); i != e; ++i) {
+    // Let mlir deterministically convert names to valid identifiers
+    setNameFn(block->getArgument(i), cast<StringAttr>(names[i]));
+  }
 }
 
 Type FunctionOp::getExplicitReturnType() {
@@ -2152,12 +2222,12 @@ void FunctionOp::print(OpAsmPrinter &p) {
   if (auto visibility = op->getAttrOfType<StringAttr>(visibilityAttrName))
     p << visibility.getValue() << ' ';
   p.printSymbolName(funcName);
-  hw::module_like_impl::printModuleSignatureNew(p, op.getBody(),
-                                                op.getModuleType(), {},
-                                                /*FIXME*/ {});
+  hw::module_like_impl::printModuleSignatureNew(
+      p, op.getBody(), op.getModuleType(), op.getPerPortAttrsAttr(), {});
 
   mlir::function_interface_impl::printFunctionAttributes(
-      p, op, {visibilityAttrName, getModuleTypeAttrName()});
+      p, op,
+      {visibilityAttrName, getModuleTypeAttrName(), getPerPortAttrsAttrName()});
   // Print the body if this is not an external function.
   Region &body = op->getRegion(0);
   if (!body.empty()) {

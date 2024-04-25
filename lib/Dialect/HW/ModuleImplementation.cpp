@@ -450,3 +450,20 @@ void module_like_impl::printModuleSignatureNew(OpAsmPrinter &p, Region &body,
 
   p << ')';
 }
+
+/// Get a special name to use when printing the entry block arguments of the
+/// region contained by an operation in this dialect.
+void module_like_impl::getAsmBlockArgumentNamesImpl(
+    mlir::Region &region, OpAsmSetValueNameFn setNameFn) {
+  if (region.empty())
+    return;
+  // Assign port names to the bbargs.
+  auto module = cast<HWModuleOp>(region.getParentOp());
+
+  auto *block = &region.front();
+  for (size_t i = 0, e = block->getNumArguments(); i != e; ++i) {
+    auto name = module.getInputName(i);
+    // Let mlir deterministically convert names to valid identifiers
+    setNameFn(block->getArgument(i), name);
+  }
+}

@@ -18,6 +18,7 @@
 #include "circt/Dialect/HW/HWTypes.h"
 #include "circt/Support/LLVM.h"
 #include "mlir/IR/DialectImplementation.h"
+#include "mlir/IR/OpImplementation.h"
 
 namespace circt {
 namespace hw {
@@ -52,10 +53,12 @@ ParseResult parseModuleSignature(OpAsmParser &parser,
                                  TypeAttr &modType);
 
 void printModuleSignatureNew(OpAsmPrinter &p, Region &body,
-                             hw::ModuleType modType, 
+                             hw::ModuleType modType,
                              ArrayRef<Attribute> portAttrs,
                              ArrayRef<Location> locAttrs);
 void printModuleSignatureNew(OpAsmPrinter &p, HWModuleLike op);
+void getAsmBlockArgumentNamesImpl(mlir::Region &region,
+                                  OpAsmSetValueNameFn setNameFn);
 
 } // namespace module_like_impl
 } // namespace hw

@@ -13,6 +13,7 @@
 include "mlir/IR/EnumAttr.td"
 include "mlir/IR/OpAsmInterface.td"
 include "mlir/Interfaces/FunctionInterfaces.td"
+include "mlir/Interfaces/ControlFlowInterfaces.td"
 include "circt/Dialect/Emit/EmitOpInterfaces.td"
 
 //===----------------------------------------------------------------------===//
@@ -934,15 +935,14 @@ def FunctionDPIDeclareOp : SVOp<"function.dpi.decl", [IsolatedFromAbove, Symbol,
   }];
 }
 
-def FunctionOp : SVOp<"function", [IsolatedFromAbove, Symbol,
+def FunctionOp : SVOp<"function", [IsolatedFromAbove, Symbol, OpAsmOpInterface,
       FunctionOpInterface, HasParent<"mlir::ModuleOp">]> {
   let summary = "A System Verilog function";
 
   let arguments = (ins 
     SymbolNameAttr:$sym_name,
     TypeAttrOf<ModuleType>:$module_type,
-    OptionalAttr<DictArrayAttr>:$per_port_attrs,
-    OptionalAttr<LocationArrayAttr>:$ports_loc
+    OptionalAttr<DictArrayAttr>:$per_port_attrs
   );
 
   // let assemblyFormat =
@@ -973,6 +973,10 @@ def FunctionOp : SVOp<"function", [IsolatedFromAbove, Symbol,
 
     ::mlir::Region *getCallableRegion() { return nullptr; }
     bool isDeclaration() { return isExternal(); }
+
+    /// OpAsmInterface
+    void getAsmBlockArgumentNames(mlir::Region &region,
+                                          mlir::OpAsmSetValueNameFn setNameFn);
   }];
 }
 
@@ -1001,4 +1005,15 @@ def FunctionCallProceduralOp : SVOp<"function.call.procedural", [CallOpInterface
       (*this)->setAttr(getCalleeAttrName(), callee.get<mlir::SymbolRefAttr>());
     }
   }];
+}
+
+def ReturnOp : SVOp<"return",
+                   [Pure, ReturnLike, Terminator, HasParent<"FunctionOp">]> {
+  let summary = "Function return operation";
+
+  let arguments = (ins Variadic<AnyType>:$operands);
+
+  let hasCustomAssemblyFormat = 1;
+  let assemblyFormat = "attr-dict ($operands^ `:` type($operands))?";
+  // TODO: Implement a verifier
 }
