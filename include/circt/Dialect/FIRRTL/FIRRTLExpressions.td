@@ -756,7 +756,7 @@ def HeadPrimOp : PrimOp<"head"> {
 }
 
 def MuxPrimOp : PrimOp<"mux"> {
-  let arguments = (ins UInt1OrUnsizedType:$sel, PassiveType:$high,
+  let arguments = (ins UIntLTE1OrUnsizedType:$sel, PassiveType:$high,
                        PassiveType:$low);
   let results = (outs PassiveType:$result);
 
@@ -842,9 +842,11 @@ def Mux2CellIntrinsicOp : PrimOp<"int.mux2cell"> {
     the inference process in the same way as a normal mux operation.
   }];
 
-  let arguments = (ins UInt1OrUnsizedType:$sel, PassiveType:$high,
+  let arguments = (ins UIntLTE1OrUnsizedType:$sel, PassiveType:$high,
                        PassiveType:$low);
   let results = (outs PassiveType:$result);
+
+  let hasCanonicalizer = true;
 
   let assemblyFormat =
     "`(` operands `)` attr-dict `:` functional-type(operands, $result)";
@@ -861,10 +863,12 @@ def Mux4CellIntrinsicOp : PrimOp<"int.mux4cell"> {
     the inference process as a sugar of mux operation chains.
   }];
 
-  let arguments = (ins UInt2OrUnsizedType:$sel, PassiveType:$v3,
+  let arguments = (ins UIntLTE2OrUnsizedType:$sel, PassiveType:$v3,
                        PassiveType:$v2, PassiveType:$v1,
                        PassiveType:$v0);
   let results = (outs PassiveType:$result);
+
+  let hasCanonicalizer = true;
 
   let assemblyFormat =
     "`(` operands `)` attr-dict `:` functional-type(operands, $result)";
@@ -1369,6 +1373,20 @@ def RWProbeOp : FIRRTLOp<"ref.rwprobe",
   let arguments = (ins InnerRefAttr:$target);
   let results = (outs RWProbeConcreteReset:$result);
   let assemblyFormat = "$target attr-dict `:` type($result)";
+}
+
+def XMRRefOp : FIRRTLOp<"xmr.ref"> {
+  let summary = "FIRRTL XMR operation, targetable by ref ops.";
+  let arguments = (ins FlatSymbolRefAttr:$ref, DefaultValuedAttr<StrAttr, "{}">:$verbatimSuffix);
+  let results = (outs RefType:$dest);
+  let assemblyFormat = "$ref (`,` $verbatimSuffix^)? attr-dict `:` qualified(type($dest))";
+}
+
+def XMRDerefOp : FIRRTLOp<"xmr.deref"> {
+  let summary = "FIRRTL XMR operation, reading an XMR target.";
+  let arguments = (ins FlatSymbolRefAttr:$ref, DefaultValuedAttr<StrAttr, "{}">:$verbatimSuffix);
+  let results = (outs PassiveType:$dest);
+  let assemblyFormat = "$ref (`,` $verbatimSuffix^)? attr-dict `:` qualified(type($dest))";
 }
 
 //===----------------------------------------------------------------------===//

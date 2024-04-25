@@ -16,6 +16,61 @@ using namespace ImportVerilog;
 // Module Member Conversion
 //===----------------------------------------------------------------------===//
 
+static moore::ProcedureKind
+convertProcedureKind(slang::ast::ProceduralBlockKind kind) {
+  switch (kind) {
+  case slang::ast::ProceduralBlockKind::Always:
+    return moore::ProcedureKind::Always;
+  case slang::ast::ProceduralBlockKind::AlwaysComb:
+    return moore::ProcedureKind::AlwaysComb;
+  case slang::ast::ProceduralBlockKind::AlwaysLatch:
+    return moore::ProcedureKind::AlwaysLatch;
+  case slang::ast::ProceduralBlockKind::AlwaysFF:
+    return moore::ProcedureKind::AlwaysFF;
+  case slang::ast::ProceduralBlockKind::Initial:
+    return moore::ProcedureKind::Initial;
+  case slang::ast::ProceduralBlockKind::Final:
+    return moore::ProcedureKind::Final;
+  }
+  llvm_unreachable("all procedure kinds handled");
+}
+
+static moore::NetKind convertNetKind(slang::ast::NetType::NetKind kind) {
+  switch (kind) {
+  case slang::ast::NetType::Supply0:
+    return moore::NetKind::Supply0;
+  case slang::ast::NetType::Supply1:
+    return moore::NetKind::Supply1;
+  case slang::ast::NetType::Tri:
+    return moore::NetKind::Tri;
+  case slang::ast::NetType::TriAnd:
+    return moore::NetKind::TriAnd;
+  case slang::ast::NetType::TriOr:
+    return moore::NetKind::TriOr;
+  case slang::ast::NetType::TriReg:
+    return moore::NetKind::TriReg;
+  case slang::ast::NetType::Tri0:
+    return moore::NetKind::Tri0;
+  case slang::ast::NetType::Tri1:
+    return moore::NetKind::Tri1;
+  case slang::ast::NetType::UWire:
+    return moore::NetKind::UWire;
+  case slang::ast::NetType::Wire:
+    return moore::NetKind::Wire;
+  case slang::ast::NetType::WAnd:
+    return moore::NetKind::WAnd;
+  case slang::ast::NetType::WOr:
+    return moore::NetKind::WOr;
+  case slang::ast::NetType::Interconnect:
+    return moore::NetKind::Interconnect;
+  case slang::ast::NetType::UserDefined:
+    return moore::NetKind::UserDefined;
+  case slang::ast::NetType::Unknown:
+    return moore::NetKind::Unknown;
+  }
+  llvm_unreachable("all net kinds handled");
+}
+
 namespace {
 struct MemberVisitor {
   Context &context;
@@ -25,11 +80,21 @@ struct MemberVisitor {
   MemberVisitor(Context &context, Location loc)
       : context(context), loc(loc), builder(context.builder) {}
 
-  /// Skip semicolons.
+  // Skip empty members (stray semicolons).
   LogicalResult visit(const slang::ast::EmptyMemberSymbol &) {
     return success();
   }
 
+  // Skip members that are implicitly imported from some other scope for the
+  // sake of name resolution, such as enum variant names.
+  LogicalResult visit(const slang::ast::TransparentMemberSymbol &) {
+    return success();
+  }
+
+  // Skip typedefs.
+  LogicalResult visit(const slang::ast::TypeAliasType &) { return success(); }
+
+  // Handle instances.
   LogicalResult visit(const slang::ast::InstanceSymbol &instNode) {
     auto targetModule = context.convertModuleHeader(&instNode.body);
     if (!targetModule)
@@ -39,6 +104,100 @@ struct MemberVisitor {
         loc, builder.getStringAttr(instNode.name),
         FlatSymbolRefAttr::get(targetModule.getSymNameAttr()));
 
+    return success();
+  }
+
+  // Handle variables.
+  LogicalResult visit(const slang::ast::VariableSymbol &varNode) {
+    auto loweredType = context.convertType(*varNode.getDeclaredType());
+    if (!loweredType)
+      return failure();
+
+    Value initial;
+    if (const auto *init = varNode.getInitializer()) {
+      initial = context.convertExpression(*init);
+      if (!initial)
+        return failure();
+
+      if (initial.getType() != loweredType)
+        initial =
+            builder.create<moore::ConversionOp>(loc, loweredType, initial);
+    }
+
+    auto varOp = builder.create<moore::VariableOp>(
+        loc, loweredType, builder.getStringAttr(varNode.name), initial);
+    context.valueSymbols.insert(&varNode, varOp);
+    return success();
+  }
+
+  // Handle nets.
+  LogicalResult visit(const slang::ast::NetSymbol &netNode) {
+    auto loweredType = context.convertType(*netNode.getDeclaredType());
+    if (!loweredType)
+      return failure();
+
+    Value assignment;
+    if (netNode.getInitializer()) {
+      assignment = context.convertExpression(*netNode.getInitializer());
+      if (!assignment)
+        return failure();
+    }
+
+    auto netkind = convertNetKind(netNode.netType.netKind);
+    if (netkind == moore::NetKind::Interconnect ||
+        netkind == moore::NetKind::UserDefined ||
+        netkind == moore::NetKind::Unknown)
+      return mlir::emitError(loc, "unsupported net kind `")
+             << netNode.netType.name << "`";
+
+    auto netOp = builder.create<moore::NetOp>(
+        loc, loweredType, builder.getStringAttr(netNode.name), netkind,
+        assignment);
+    context.valueSymbols.insert(&netNode, netOp);
+    return success();
+  }
+
+  // Handle continuous assignments.
+  LogicalResult visit(const slang::ast::ContinuousAssignSymbol &assignNode) {
+    if (const auto *delay = assignNode.getDelay()) {
+      auto loc = context.convertLocation(delay->sourceRange);
+      return mlir::emitError(loc,
+                             "delayed continuous assignments not supported");
+    }
+
+    const auto &expr =
+        assignNode.getAssignment().as<slang::ast::AssignmentExpression>();
+
+    auto lhs = context.convertExpression(expr.left());
+    auto rhs = context.convertExpression(expr.right());
+    if (!lhs || !rhs)
+      return failure();
+
+    if (lhs.getType() != rhs.getType())
+      rhs = builder.create<moore::ConversionOp>(loc, lhs.getType(), rhs);
+
+    builder.create<moore::ContinuousAssignOp>(loc, lhs, rhs);
+    return success();
+  }
+
+  // Handle procedures.
+  LogicalResult visit(const slang::ast::ProceduralBlockSymbol &procNode) {
+    auto procOp = builder.create<moore::ProcedureOp>(
+        loc, convertProcedureKind(procNode.procedureKind));
+    procOp.getBodyRegion().emplaceBlock();
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToEnd(procOp.getBody());
+    Context::ValueSymbolScope scope(context.valueSymbols);
+    return context.convertStatement(procNode.getBody());
+  }
+
+  // Ignore statement block symbols. These get generated by Slang for blocks
+  // with variables and other declarations. For example, having an initial
+  // procedure with a variable declaration, such as `initial begin int x;
+  // end`, will create the procedure with a block and variable declaration as
+  // expected, but will also create a `StatementBlockSymbol` with just the
+  // variable layout _next to_ the initial procedure.
+  LogicalResult visit(const slang::ast::StatementBlockSymbol &) {
     return success();
   }
 
@@ -151,6 +310,7 @@ Context::convertModuleBody(const slang::ast::InstanceBodySymbol *module) {
   OpBuilder::InsertionGuard g(builder);
   builder.setInsertionPointToEnd(moduleOp.getBody());
 
+  ValueSymbolScope scope(valueSymbols);
   for (auto &member : module->members()) {
     auto loc = convertLocation(member.location);
     if (failed(member.visit(MemberVisitor(*this, loc))))

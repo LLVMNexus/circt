@@ -35,7 +35,7 @@ firrtl.circuit "" {
 
 firrtl.circuit "foo" {
 // expected-error @+1 {{requires 1 port directions}}
-firrtl.module @foo(in %a : !firrtl.uint<1>) attributes {portDirections = 3 : i2} {}
+firrtl.module @foo(in %a : !firrtl.uint<1>) attributes {portDirections = array<i1: true, true>} {}
 }
 
 // -----
@@ -72,7 +72,7 @@ firrtl.circuit "foo" {
 // expected-error @+1 {{requires one region}}
 "firrtl.module"() ( { }, { })
    {sym_name = "foo", convention = #firrtl<convention internal>,
-    portTypes = [!firrtl.uint], portDirections = 1 : i1,
+    portTypes = [!firrtl.uint], portDirections = array<i1: true>,
     portNames = ["in0"], portAnnotations = [], portSyms = []} : () -> ()
 }
 
@@ -83,7 +83,7 @@ firrtl.circuit "foo" {
 "firrtl.module"() ( {
   ^entry:
 }) { sym_name = "foo", convention = #firrtl<convention internal>,
-    portTypes = [!firrtl.uint], portDirections = 1 : i1,
+    portTypes = [!firrtl.uint], portDirections = array<i1: true>,
     portNames = ["in0"], portAnnotations = [], portSyms = []} : () -> ()
 }
 
@@ -94,7 +94,7 @@ firrtl.circuit "foo" {
 "firrtl.module"() ( {
   ^entry:
 }) {sym_name = "foo", convention = #firrtl<convention internal>,
-    portTypes = [!firrtl.uint], portDirections = 1 : i1,
+    portTypes = [!firrtl.uint], portDirections = array<i1: true>,
     portNames = ["in0"], portAnnotations = [], portSyms = [],
     portLocations = []} : () -> ()
 }
@@ -109,7 +109,7 @@ firrtl.circuit "foo" {
 "firrtl.module"() ( {
   ^entry:
 }) {sym_name = "foo", convention = #firrtl<convention internal>,
-    portTypes = [!firrtl.uint], portDirections = 1 : i1,
+    portTypes = [!firrtl.uint], portDirections = array<i1: true>,
     portNames = ["in0"], portAnnotations = [], portSyms = [],
     portLocations = [loc("loc")]} : () -> ()
 }
@@ -121,7 +121,7 @@ firrtl.circuit "foo" {
 "firrtl.module"() ( {
   ^entry(%a: i1):
 }) {sym_name = "foo", convention = #firrtl<convention internal>,
-    portTypes = [!firrtl.uint], portDirections = 1 : i1,
+    portTypes = [!firrtl.uint], portDirections = array<i1: true>,
     portNames = ["in0"], portAnnotations = [], portSyms = [],
     portLocations = [loc("foo")]} : () -> ()
 }
@@ -139,7 +139,7 @@ firrtl.module @Foo() {
 
 firrtl.circuit "Foo" {
 firrtl.module @Foo() {
-  // expected-error @+1 {{constant too large for result type}}
+  // expected-error @+1 {{constant out of range for result type}}
   firrtl.constant 100 : !firrtl.uint<4>
 }
 }
@@ -148,8 +148,17 @@ firrtl.module @Foo() {
 
 firrtl.circuit "Foo" {
 firrtl.module @Foo() {
-  // expected-error @+1 {{constant too large for result type}}
+  // expected-error @+1 {{constant out of range for result type}}
   firrtl.constant -100 : !firrtl.sint<4>
+}
+}
+
+// -----
+
+firrtl.circuit "Foo" {
+firrtl.module @Foo() {
+  // expected-error @+1 {{constant out of range for result type}}
+  firrtl.constant -2 : !firrtl.sint<1>
 }
 }
 
@@ -2372,7 +2381,7 @@ firrtl.circuit "NoCases" {
       caseNames = [],
       name = "inst",
       nameKind = #firrtl<name_kind interesting_name>,
-      portDirections = 0 : i0,
+      portDirections = array<i1>,
       portNames = [],
       annotations = [],
       portAnnotations = [],
@@ -2403,7 +2412,7 @@ firrtl.circuit "MismatchedCases" {
       caseNames = [@Platform::@ASIC, @Perf::@Fast],
       name = "inst",
       nameKind = #firrtl<name_kind interesting_name>,
-      portDirections = 0 : i0,
+      portDirections = array<i1>,
       portNames = [],
       annotations = [],
       portAnnotations = [],

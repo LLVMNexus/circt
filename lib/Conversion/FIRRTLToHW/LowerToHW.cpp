@@ -13,6 +13,7 @@
 #include "../PassDetail.h"
 #include "circt/Conversion/FIRRTLToHW.h"
 #include "circt/Dialect/Comb/CombOps.h"
+#include "circt/Dialect/Emit/EmitOps.h"
 #include "circt/Dialect/FIRRTL/AnnotationDetails.h"
 #include "circt/Dialect/FIRRTL/FIRRTLAnnotations.h"
 #include "circt/Dialect/FIRRTL/FIRRTLInstanceGraph.h"
@@ -42,6 +43,7 @@
 #include "llvm/ADT/TinyPtrVector.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/FormatVariadic.h"
+#include "llvm/Support/Mutex.h"
 #include "llvm/Support/Parallel.h"
 
 #define DEBUG_TYPE "lower-to-hw"
@@ -207,16 +209,17 @@ struct FIRRTLModuleLowering;
 
 /// This is state shared across the parallel module lowering logic.
 struct CircuitLoweringState {
-  std::atomic<bool> used_PRINTF_COND{false};
-  std::atomic<bool> used_ASSERT_VERBOSE_COND{false};
-  std::atomic<bool> used_STOP_COND{false};
+  // Flags indicating whether the circuit uses certain header fragments.
+  std::atomic<bool> usedPrintfCond{false};
+  std::atomic<bool> usedAssertVerboseCond{false};
+  std::atomic<bool> usedStopCond{false};
 
   CircuitLoweringState(CircuitOp circuitOp, bool enableAnnotationWarning,
-                       bool emitChiselAssertsAsSVA,
+                       firrtl::VerificationFlavor verificationFlavor,
                        InstanceGraph &instanceGraph, NLATable *nlaTable)
       : circuitOp(circuitOp), instanceGraph(instanceGraph),
         enableAnnotationWarning(enableAnnotationWarning),
-        emitChiselAssertsAsSVA(emitChiselAssertsAsSVA), nlaTable(nlaTable) {
+        verificationFlavor(verificationFlavor), nlaTable(nlaTable) {
     auto *context = circuitOp.getContext();
 
     // Get the testbench output directory.
@@ -243,11 +246,39 @@ struct CircuitLoweringState {
     } else if (dut == testHarness) {
       testHarness = nullptr;
     }
+
+    // Pre-populate the dutModules member with a list of all modules that are
+    // determined to be under the DUT.
+    auto inDUT = [&](igraph::ModuleOpInterface child) {
+      auto isBind = [](igraph::InstanceRecord *instRec) {
+        auto inst = instRec->getInstance();
+        if (auto *finst = dyn_cast<InstanceOp>(&inst))
+          return finst->getLowerToBind();
+        return false;
+      };
+      if (auto parent = dyn_cast<igraph::ModuleOpInterface>(*dut))
+        return getInstanceGraph().isAncestor(child, parent, isBind);
+      return dut == child;
+    };
+    circuitOp->walk([&](FModuleLike moduleOp) {
+      if (inDUT(moduleOp))
+        dutModules.insert(moduleOp);
+    });
   }
 
   Operation *getNewModule(Operation *oldModule) {
     auto it = oldToNewModuleMap.find(oldModule);
     return it != oldToNewModuleMap.end() ? it->second : nullptr;
+  }
+
+  Operation *getOldModule(Operation *newModule) {
+    auto it = newToOldModuleMap.find(newModule);
+    return it != newToOldModuleMap.end() ? it->second : nullptr;
+  }
+
+  void recordModuleMapping(Operation *oldFMod, Operation *newHWMod) {
+    oldToNewModuleMap[oldFMod] = newHWMod;
+    newToOldModuleMap[newHWMod] = oldFMod;
   }
 
   // Process remaining annotations and emit warnings on unprocessed annotations
@@ -280,11 +311,13 @@ struct CircuitLoweringState {
   FModuleLike getTestHarness() { return testHarness; }
 
   // Return true if this module is the DUT or is instantiated by the DUT.
-  // Returns false if the module is not instantiated by the DUT.
+  // Returns false if the module is not instantiated by the DUT or is
+  // instantiated under a bind.  This will accept either an old FIRRTL module or
+  // a new HW module.
   bool isInDUT(igraph::ModuleOpInterface child) {
-    if (auto parent = dyn_cast<igraph::ModuleOpInterface>(*dut))
-      return getInstanceGraph().isAncestor(child, parent);
-    return dut == child;
+    if (auto hwModule = dyn_cast<hw::HWModuleOp>(child.getOperation()))
+      child = cast<igraph::ModuleOpInterface>(getOldModule(hwModule));
+    return dutModules.contains(child);
   }
 
   hw::OutputFileAttr getTestBenchDirectory() { return testBenchDirectory; }
@@ -313,11 +346,22 @@ private:
   CircuitLoweringState(const CircuitLoweringState &) = delete;
   void operator=(const CircuitLoweringState &) = delete;
 
+  /// Mapping of FModuleOp to HWModuleOp
   DenseMap<Operation *, Operation *> oldToNewModuleMap;
+
+  /// Mapping of HWModuleOp to FModuleOp
+  DenseMap<Operation *, Operation *> newToOldModuleMap;
 
   /// Cache of module symbols.  We need to test hirarchy-based properties to
   /// lower annotaitons.
   InstanceGraph &instanceGraph;
+
+  /// The set of old FIRRTL modules that are instantiated under the DUT.  This
+  /// is precomputed as a module being under the DUT may rely on knowledge of
+  /// properties of the instance and is not suitable for querying in the
+  /// parallel execution region of this pass when the backing instances may
+  /// already be erased.
+  DenseSet<igraph::ModuleOpInterface> dutModules;
 
   // Record the set of remaining annotation classes. This is used to warn only
   // once about any annotation class.
@@ -325,7 +369,7 @@ private:
   const bool enableAnnotationWarning;
   std::mutex annotationPrintingMtx;
 
-  const bool emitChiselAssertsAsSVA;
+  const firrtl::VerificationFlavor verificationFlavor;
 
   // Records any sv::BindOps that are found during the course of execution.
   // This is unsafe to access directly and should only be used through addBind.
@@ -348,6 +392,26 @@ private:
   /// A mapping of instances to their forced instantiation names (if
   /// applicable).
   DenseMap<std::pair<Attribute, Attribute>, Attribute> instanceForceNames;
+
+  /// The set of guard macros to emit declarations for.
+  SetVector<StringAttr> macroDeclNames;
+  std::mutex macroDeclMutex;
+
+  void addMacroDecl(StringAttr name) {
+    std::unique_lock<std::mutex> lock(macroDeclMutex);
+    macroDeclNames.insert(name);
+  }
+
+  /// The list of fragments on which the modules rely. Must be set outside the
+  /// parallelized module lowering since module type reads access it.
+  DenseMap<hw::HWModuleOp, SetVector<Attribute>> fragments;
+  llvm::sys::SmartMutex<true> fragmentsMutex;
+
+  void addFragment(hw::HWModuleOp module, StringRef fragment) {
+    llvm::sys::SmartScopedLock<true> lock(fragmentsMutex);
+    fragments[module].insert(
+        FlatSymbolRefAttr::get(circuitOp.getContext(), fragment));
+  }
 
   /// Cached nla table analysis.
   NLATable *nlaTable = nullptr;
@@ -457,7 +521,6 @@ void CircuitLoweringState::processRemainingAnnotations(
             // consuming these, they will linger around and can be ignored.
             scalaClassAnnoClass, dutAnnoClass, metadataDirectoryAttrName,
             elaborationArtefactsDirectoryAnnoClass, testBenchDirAnnoClass,
-            subCircuitsTargetDirectoryAnnoClass,
             // This annotation is used to mark which external modules are
             // imported blackboxes from the BlackBoxReader pass.
             blackBoxAnnoClass,
@@ -485,7 +548,8 @@ struct FIRRTLModuleLowering : public LowerFIRRTLToHWBase<FIRRTLModuleLowering> {
 
   void runOnOperation() override;
   void setEnableAnnotationWarning() { enableAnnotationWarning = true; }
-  void setEmitChiselAssertAsSVA() { emitChiselAssertsAsSVA = true; }
+
+  using LowerFIRRTLToHWBase<FIRRTLModuleLowering>::verificationFlavor;
 
 private:
   void lowerFileHeader(CircuitOp op, CircuitLoweringState &loweringState);
@@ -514,14 +578,13 @@ private:
 } // end anonymous namespace
 
 /// This is the pass constructor.
-std::unique_ptr<mlir::Pass>
-circt::createLowerFIRRTLToHWPass(bool enableAnnotationWarning,
-                                 bool emitChiselAssertsAsSVA) {
+std::unique_ptr<mlir::Pass> circt::createLowerFIRRTLToHWPass(
+    bool enableAnnotationWarning,
+    firrtl::VerificationFlavor verificationFlavor) {
   auto pass = std::make_unique<FIRRTLModuleLowering>();
   if (enableAnnotationWarning)
     pass->setEnableAnnotationWarning();
-  if (emitChiselAssertsAsSVA)
-    pass->setEmitChiselAssertAsSVA();
+  pass->verificationFlavor = verificationFlavor;
   return pass;
 }
 
@@ -547,9 +610,9 @@ void FIRRTLModuleLowering::runOnOperation() {
 
   // Keep track of the mapping from old to new modules.  The result may be null
   // if lowering failed.
-  CircuitLoweringState state(
-      circuit, enableAnnotationWarning, emitChiselAssertsAsSVA,
-      getAnalysis<InstanceGraph>(), &getAnalysis<NLATable>());
+  CircuitLoweringState state(circuit, enableAnnotationWarning,
+                             verificationFlavor, getAnalysis<InstanceGraph>(),
+                             &getAnalysis<NLATable>());
 
   SmallVector<hw::HWModuleOp, 32> modulesToProcess;
 
@@ -574,7 +637,7 @@ void FIRRTLModuleLowering::runOnOperation() {
               if (!loweredMod)
                 return failure();
 
-              state.oldToNewModuleMap[&op] = loweredMod;
+              state.recordModuleMapping(&op, loweredMod);
               modulesToProcess.push_back(loweredMod);
               // Lower all the alias types.
               module.walk([&](Operation *op) {
@@ -591,7 +654,7 @@ void FIRRTLModuleLowering::runOnOperation() {
                   lowerExtModule(extModule, topLevelModule, state);
               if (!loweredMod)
                 return failure();
-              state.oldToNewModuleMap[&op] = loweredMod;
+              state.recordModuleMapping(&op, loweredMod);
               return success();
             })
             .Case<FMemModuleOp>([&](auto memModule) {
@@ -599,7 +662,7 @@ void FIRRTLModuleLowering::runOnOperation() {
                   lowerMemModule(memModule, topLevelModule, state);
               if (!loweredMod)
                 return failure();
-              state.oldToNewModuleMap[&op] = loweredMod;
+              state.recordModuleMapping(&op, loweredMod);
               return success();
             })
             .Default([&](Operation *op) {
@@ -649,13 +712,13 @@ void FIRRTLModuleLowering::runOnOperation() {
   });
   // Attach the lowered form of these annotations.
   if (!dutHierarchyFiles.empty())
-    state.oldToNewModuleMap[state.getDut()]->setAttr(
-        moduleHierarchyFileAttrName,
-        ArrayAttr::get(&getContext(), dutHierarchyFiles));
+    state.getNewModule(state.getDut())
+        ->setAttr(moduleHierarchyFileAttrName,
+                  ArrayAttr::get(&getContext(), dutHierarchyFiles));
   if (!testHarnessHierarchyFiles.empty())
-    state.oldToNewModuleMap[state.getTestHarness()]->setAttr(
-        moduleHierarchyFileAttrName,
-        ArrayAttr::get(&getContext(), testHarnessHierarchyFiles));
+    state.getNewModule(state.getTestHarness())
+        ->setAttr(moduleHierarchyFileAttrName,
+                  ArrayAttr::get(&getContext(), testHarnessHierarchyFiles));
 
   // Finally, lower all operations.
   auto result = mlir::failableParallelForEachN(
@@ -672,9 +735,21 @@ void FIRRTLModuleLowering::runOnOperation() {
     bind->moveBefore(bind->getParentOfType<hw::HWModuleOp>());
   }
 
+  // Fix up fragment attributes.
+  for (auto &[module, fragments] : state.fragments)
+    module->setAttr(emit::getFragmentsAttrName(),
+                    ArrayAttr::get(&getContext(), fragments.getArrayRef()));
+
   // Finally delete all the old modules.
   for (auto oldNew : state.oldToNewModuleMap)
     oldNew.first->erase();
+
+  if (!state.macroDeclNames.empty()) {
+    ImplicitLocOpBuilder b(UnknownLoc::get(&getContext()), circuit);
+    for (auto name : state.macroDeclNames) {
+      b.create<sv::MacroDeclOp>(name);
+    }
+  }
 
   // Emit all the macros and preprocessor gunk at the start of the file.
   lowerFileHeader(circuit, state);
@@ -686,28 +761,9 @@ void FIRRTLModuleLowering::runOnOperation() {
 /// Emit the file header that defines a bunch of macros.
 void FIRRTLModuleLowering::lowerFileHeader(CircuitOp op,
                                            CircuitLoweringState &state) {
-  // If none of the macros are needed, then don't emit any header at all, not
-  // even the header comment.
-  if (!state.used_PRINTF_COND && !state.used_ASSERT_VERBOSE_COND &&
-      !state.used_STOP_COND)
-    return;
-
   // Intentionally pass an UnknownLoc here so we don't get line number
   // comments on the output of this boilerplate in generated Verilog.
   ImplicitLocOpBuilder b(UnknownLoc::get(&getContext()), op);
-
-  // TODO: We could have an operation for macros and uses of them, and
-  // even turn them into symbols so we can DCE unused macro definitions.
-  StringSet<> emittedDecls;
-  auto emitDefine = [&](StringRef name, StringRef body, ArrayAttr args = {}) {
-    if (!emittedDecls.count(name)) {
-      emittedDecls.insert(name);
-      OpBuilder::InsertionGuard guard(b);
-      b.setInsertionPointAfter(op);
-      b.create<sv::MacroDeclOp>(name, args, StringAttr());
-    }
-    b.create<sv::MacroDefOp>(name, body);
-  };
 
   // Helper function to emit a "#ifdef guard" with a `define in the then and
   // optionally in the else branch.
@@ -716,15 +772,16 @@ void FIRRTLModuleLowering::lowerFileHeader(CircuitOp op,
                                StringRef defineFalse = StringRef()) {
     if (!defineFalse.data()) {
       assert(defineTrue.data() && "didn't define anything");
-      b.create<sv::IfDefOp>(guard, [&]() { emitDefine(defName, defineTrue); });
+      b.create<sv::IfDefOp>(
+          guard, [&]() { b.create<sv::MacroDefOp>(defName, defineTrue); });
     } else {
       b.create<sv::IfDefOp>(
           guard,
           [&]() {
             if (defineTrue.data())
-              emitDefine(defName, defineTrue);
+              b.create<sv::MacroDefOp>(defName, defineTrue);
           },
-          [&]() { emitDefine(defName, defineFalse); });
+          [&]() { b.create<sv::MacroDefOp>(defName, defineFalse); });
     }
   };
 
@@ -734,39 +791,45 @@ void FIRRTLModuleLowering::lowerFileHeader(CircuitOp op,
         guard, []() {}, body);
   };
 
-  b.create<sv::VerbatimOp>("// Standard header to adapt well known macros for "
-                           "prints and assertions.");
-
-  if (state.used_PRINTF_COND) {
-    b.create<sv::VerbatimOp>(
-        "\n// Users can define 'PRINTF_COND' to add an extra gate to "
-        "prints.");
-    emitGuard("PRINTF_COND_", [&]() {
-      emitGuardedDefine("PRINTF_COND", "PRINTF_COND_", "(`PRINTF_COND)", "1");
+  if (state.usedPrintfCond) {
+    b.create<sv::MacroDeclOp>("PRINTF_COND");
+    b.create<sv::MacroDeclOp>("PRINTF_COND_");
+    b.create<emit::FragmentOp>("PRINTF_COND_FRAGMENT", [&] {
+      b.create<sv::VerbatimOp>(
+          "\n// Users can define 'PRINTF_COND' to add an extra gate to "
+          "prints.");
+      emitGuard("PRINTF_COND_", [&]() {
+        emitGuardedDefine("PRINTF_COND", "PRINTF_COND_", "(`PRINTF_COND)", "1");
+      });
     });
   }
 
-  if (state.used_ASSERT_VERBOSE_COND) {
-    b.create<sv::VerbatimOp>(
-        "\n// Users can define 'ASSERT_VERBOSE_COND' to add an extra "
-        "gate to assert error printing.");
-    emitGuard("ASSERT_VERBOSE_COND_", [&]() {
-      emitGuardedDefine("ASSERT_VERBOSE_COND", "ASSERT_VERBOSE_COND_",
-                        "(`ASSERT_VERBOSE_COND)", "1");
+  if (state.usedAssertVerboseCond) {
+    b.create<sv::MacroDeclOp>("ASSERT_VERBOSE_COND");
+    b.create<sv::MacroDeclOp>("ASSERT_VERBOSE_COND_");
+    b.create<emit::FragmentOp>("ASSERT_VERBOSE_COND_FRAGMENT", [&] {
+      b.create<sv::VerbatimOp>(
+          "\n// Users can define 'ASSERT_VERBOSE_COND' to add an extra "
+          "gate to assert error printing.");
+      emitGuard("ASSERT_VERBOSE_COND_", [&]() {
+        emitGuardedDefine("ASSERT_VERBOSE_COND", "ASSERT_VERBOSE_COND_",
+                          "(`ASSERT_VERBOSE_COND)", "1");
+      });
     });
   }
 
-  if (state.used_STOP_COND) {
-    b.create<sv::VerbatimOp>(
-        "\n// Users can define 'STOP_COND' to add an extra gate "
-        "to stop conditions.");
-    emitGuard("STOP_COND_", [&]() {
-      emitGuardedDefine("STOP_COND", "STOP_COND_", "(`STOP_COND)", "1");
+  if (state.usedStopCond) {
+    b.create<sv::MacroDeclOp>("STOP_COND");
+    b.create<sv::MacroDeclOp>("STOP_COND_");
+    b.create<emit::FragmentOp>("STOP_COND_FRAGMENT", [&] {
+      b.create<sv::VerbatimOp>(
+          "\n// Users can define 'STOP_COND' to add an extra gate "
+          "to stop conditions.");
+      emitGuard("STOP_COND_", [&]() {
+        emitGuardedDefine("STOP_COND", "STOP_COND_", "(`STOP_COND)", "1");
+      });
     });
   }
-
-  // Blank line to separate the header from the modules.
-  b.create<sv::VerbatimOp>("");
 }
 
 LogicalResult
@@ -1056,9 +1119,11 @@ FIRRTLModuleLowering::lowerModule(FModuleOp oldModule, Block *topLevelModule,
     newModule->setAttr("firrtl.extract.cover.extra", builder.getUnitAttr());
 
   // If this is in the test harness, make sure it goes to the test directory.
+  // Do not update output file information if it is already present.
   if (auto testBenchDir = loweringState.getTestBenchDirectory())
     if (loweringState.isInTestHarness(oldModule)) {
-      newModule->setAttr("output_file", testBenchDir);
+      if (!newModule->hasAttr("output_file"))
+        newModule->setAttr("output_file", testBenchDir);
       newModule->setAttr("firrtl.extract.do_not_extract",
                          builder.getUnitAttr());
       newModule.setCommentAttr(
@@ -1228,7 +1293,6 @@ LogicalResult FIRRTLModuleLowering::lowerModulePortsAndMoveBody(
 
   // Insert argument casts, and re-vector users in the old body to use them.
   SmallVector<PortInfo> firrtlPorts = oldModule.getPorts();
-  SmallVector<hw::PortInfo> hwPorts = newModule.getPortList();
   assert(oldModule.getBody().getNumArguments() == firrtlPorts.size() &&
          "port count mismatch");
 
@@ -1299,7 +1363,7 @@ LogicalResult FIRRTLModuleLowering::lowerModulePortsAndMoveBody(
       outputs.push_back(output);
 
       // If output port has symbol, move it to this wire.
-      if (auto sym = hwPorts[hwPortIndex].getSym()) {
+      if (auto sym = newModule.getPort(hwPortIndex).getSym()) {
         newArg.setInnerSymAttr(sym);
         newModule.setPortSymbolAttr(hwPortIndex, {});
       }
@@ -1351,6 +1415,7 @@ struct FIRRTLLowering : public FIRRTLVisitor<FIRRTLLowering, LogicalResult> {
   Value getLoweredNonClockValue(Value value);
   Value getLoweredAndExtendedValue(Value value, Type destType);
   Value getLoweredAndExtOrTruncValue(Value value, Type destType);
+  Value getLoweredFmtOperand(Value operand);
   LogicalResult setLowering(Value orig, Value result);
   LogicalResult setPossiblyFoldedLowering(Value orig, Value result);
   template <typename ResultOpType, typename... CtorArgTypes>
@@ -1406,6 +1471,8 @@ struct FIRRTLLowering : public FIRRTLVisitor<FIRRTLLowering, LogicalResult> {
                      std::function<void(void)>());
   }
 
+  LogicalResult emitGuards(Location loc, ArrayRef<Attribute> guards,
+                           std::function<void(void)> emit);
   void addToIfDefBlock(StringRef cond, std::function<void(void)> thenCtor,
                        std::function<void(void)> elseCtor = {});
   void addToInitialBlock(std::function<void(void)> body);
@@ -1436,7 +1503,11 @@ struct FIRRTLLowering : public FIRRTLVisitor<FIRRTLLowering, LogicalResult> {
   LogicalResult visitExpr(IsTagOp op);
   LogicalResult visitExpr(SubtagOp op);
   LogicalResult visitUnhandledOp(Operation *op) { return failure(); }
-  LogicalResult visitInvalidOp(Operation *op) { return failure(); }
+  LogicalResult visitInvalidOp(Operation *op) {
+    if (auto castOp = dyn_cast<mlir::UnrealizedConversionCastOp>(op))
+      return visitUnrealizedConversionCast(castOp);
+    return failure();
+  }
 
   // Declarations.
   LogicalResult visitDecl(WireOp op);
@@ -1456,7 +1527,8 @@ struct FIRRTLLowering : public FIRRTLVisitor<FIRRTLLowering, LogicalResult> {
 
   LogicalResult visitExpr(HWStructCastOp op);
   LogicalResult visitExpr(BitCastOp op);
-  LogicalResult visitExpr(mlir::UnrealizedConversionCastOp op);
+  LogicalResult
+  visitUnrealizedConversionCast(mlir::UnrealizedConversionCastOp op);
   LogicalResult visitExpr(CvtPrimOp op);
   LogicalResult visitExpr(NotPrimOp op);
   LogicalResult visitExpr(NegPrimOp op);
@@ -1533,12 +1605,13 @@ struct FIRRTLLowering : public FIRRTLVisitor<FIRRTLLowering, LogicalResult> {
     return lowerDivLikeOp<comb::ModSOp, comb::ModUOp>(op);
   }
 
-  // Verif Operations
+  // Intrinsic Operations
   LogicalResult visitExpr(IsXIntrinsicOp op);
   LogicalResult visitExpr(PlusArgsTestIntrinsicOp op);
   LogicalResult visitExpr(PlusArgsValueIntrinsicOp op);
-  LogicalResult visitExpr(FPGAProbeIntrinsicOp op);
+  LogicalResult visitStmt(FPGAProbeIntrinsicOp op);
   LogicalResult visitExpr(ClockInverterIntrinsicOp op);
+  LogicalResult visitExpr(ClockDividerIntrinsicOp op);
   LogicalResult visitExpr(SizeOfIntrinsicOp op);
   LogicalResult visitExpr(ClockGateIntrinsicOp op);
   LogicalResult visitExpr(LTLAndIntrinsicOp op);
@@ -1554,6 +1627,7 @@ struct FIRRTLLowering : public FIRRTLVisitor<FIRRTLLowering, LogicalResult> {
   LogicalResult visitStmt(VerifAssumeIntrinsicOp op);
   LogicalResult visitStmt(VerifCoverIntrinsicOp op);
   LogicalResult visitExpr(HasBeenResetIntrinsicOp op);
+  LogicalResult visitStmt(UnclockedAssumeIntrinsicOp op);
 
   // Other Operations
   LogicalResult visitExpr(BitsPrimOp op);
@@ -2228,6 +2302,28 @@ Value FIRRTLLowering::getLoweredAndExtOrTruncValue(Value value, Type destType) {
   return builder.createOrFold<comb::ConcatOp>(zero, result);
 }
 
+/// Return a lowered version of 'operand' suitable for use with substitution /
+/// format strings. Zero bit operands are rewritten as one bit zeros and signed
+/// integers are wrapped in $signed().
+Value FIRRTLLowering::getLoweredFmtOperand(Value operand) {
+  auto loweredValue = getLoweredValue(operand);
+  if (!loweredValue) {
+    // If this is a zero bit operand, just pass a one bit zero.
+    if (!isZeroBitFIRRTLType(operand.getType()))
+      return nullptr;
+    loweredValue = getOrCreateIntConstant(1, 0);
+  }
+
+  // If the operand was an SInt, we want to give the user the option to print
+  // it as signed decimal and have to wrap it in $signed().
+  if (auto intTy = firrtl::type_cast<IntType>(operand.getType()))
+    if (intTy.isSigned())
+      loweredValue = builder.create<sv::SystemFunctionOp>(
+          loweredValue.getType(), "signed", loweredValue);
+
+  return loweredValue;
+}
+
 /// Set the lowered value of 'orig' to 'result', remembering this in a map.
 /// This always returns success() to make it more convenient in lowering code.
 ///
@@ -2467,6 +2563,27 @@ void FIRRTLLowering::addToAlwaysBlock(sv::EventControl clockEdge, Value clock,
   // defined ahead of the uses, which leads to better generated Verilog.
   alwaysOp->moveBefore(builder.getInsertionBlock(),
                        builder.getInsertionPoint());
+}
+
+LogicalResult FIRRTLLowering::emitGuards(Location loc,
+                                         ArrayRef<Attribute> guards,
+                                         std::function<void(void)> emit) {
+  if (guards.empty()) {
+    emit();
+    return success();
+  }
+  auto guard = guards[0].dyn_cast<StringAttr>();
+  if (!guard)
+    return mlir::emitError(loc,
+                           "elements in `guards` array must be `StringAttr`");
+
+  // Record the guard macro to emit a declaration for it.
+  circuitState.addMacroDecl(builder.getStringAttr(guard.getValue()));
+  LogicalResult result = LogicalResult::failure();
+  addToIfDefBlock(guard.getValue(), [&]() {
+    result = emitGuards(loc, guards.drop_front(), emit);
+  });
+  return result;
 }
 
 void FIRRTLLowering::addToIfDefBlock(StringRef cond,
@@ -3224,7 +3341,8 @@ LogicalResult FIRRTLLowering::visitExpr(AsClockPrimOp op) {
   return setLoweringTo<seq::ToClockOp>(op, getLoweredValue(op.getInput()));
 }
 
-LogicalResult FIRRTLLowering::visitExpr(mlir::UnrealizedConversionCastOp op) {
+LogicalResult FIRRTLLowering::visitUnrealizedConversionCast(
+    mlir::UnrealizedConversionCastOp op) {
   // General lowering for non-unary casts.
   if (op.getNumOperands() != 1 || op.getNumResults() != 1)
     return failure();
@@ -3536,7 +3654,7 @@ LogicalResult FIRRTLLowering::visitExpr(IsXIntrinsicOp op) {
       getOrCreateXConstant(input.getType().getIntOrFloatBitWidth()), true);
 }
 
-LogicalResult FIRRTLLowering::visitExpr(FPGAProbeIntrinsicOp op) {
+LogicalResult FIRRTLLowering::visitStmt(FPGAProbeIntrinsicOp op) {
   auto operand = getLoweredValue(op.getInput());
   builder.create<hw::WireOp>(operand);
   return success();
@@ -3578,6 +3696,11 @@ LogicalResult FIRRTLLowering::visitExpr(ClockGateIntrinsicOp op) {
 LogicalResult FIRRTLLowering::visitExpr(ClockInverterIntrinsicOp op) {
   auto operand = getLoweredValue(op.getInput());
   return setLoweringTo<seq::ClockInverterOp>(op, operand);
+}
+
+LogicalResult FIRRTLLowering::visitExpr(ClockDividerIntrinsicOp op) {
+  auto operand = getLoweredValue(op.getInput());
+  return setLoweringTo<seq::ClockDividerOp>(op, operand, op.getPow2());
 }
 
 LogicalResult FIRRTLLowering::visitExpr(LTLAndIntrinsicOp op) {
@@ -4081,6 +4204,7 @@ LogicalResult FIRRTLLowering::visitStmt(ForceOp op) {
     return op.emitError("destination isn't an inout type");
 
   // #ifndef SYNTHESIS
+  circuitState.addMacroDecl(builder.getStringAttr("SYNTHESIS"));
   addToIfDefBlock("SYNTHESIS", std::function<void()>(), [&]() {
     addToInitialBlock([&]() { builder.create<sv::ForceOp>(destVal, srcVal); });
   });
@@ -4099,6 +4223,7 @@ LogicalResult FIRRTLLowering::visitStmt(RefForceOp op) {
     return failure();
 
   // #ifndef SYNTHESIS
+  circuitState.addMacroDecl(builder.getStringAttr("SYNTHESIS"));
   addToIfDefBlock("SYNTHESIS", std::function<void()>(), [&]() {
     addToAlwaysBlock(clock, [&]() {
       addIfProceduralBlock(
@@ -4118,6 +4243,7 @@ LogicalResult FIRRTLLowering::visitStmt(RefForceInitialOp op) {
     return failure();
 
   // #ifndef SYNTHESIS
+  circuitState.addMacroDecl(builder.getStringAttr("SYNTHESIS"));
   addToIfDefBlock("SYNTHESIS", std::function<void()>(), [&]() {
     addToInitialBlock([&]() {
       addIfProceduralBlock(
@@ -4137,6 +4263,7 @@ LogicalResult FIRRTLLowering::visitStmt(RefReleaseOp op) {
     return failure();
 
   // #ifndef SYNTHESIS
+  circuitState.addMacroDecl(builder.getStringAttr("SYNTHESIS"));
   addToIfDefBlock("SYNTHESIS", std::function<void()>(), [&]() {
     addToAlwaysBlock(clock, [&]() {
       addIfProceduralBlock(pred,
@@ -4152,6 +4279,7 @@ LogicalResult FIRRTLLowering::visitStmt(RefReleaseInitialOp op) {
     return failure();
 
   // #ifndef SYNTHESIS
+  circuitState.addMacroDecl(builder.getStringAttr("SYNTHESIS"));
   addToIfDefBlock("SYNTHESIS", std::function<void()>(), [&]() {
     addToInitialBlock([&]() {
       addIfProceduralBlock(pred,
@@ -4172,19 +4300,18 @@ LogicalResult FIRRTLLowering::visitStmt(PrintFOp op) {
   SmallVector<Value, 4> operands;
   operands.reserve(op.getSubstitutions().size());
   for (auto operand : op.getSubstitutions()) {
-    operands.push_back(getLoweredValue(operand));
-    if (!operands.back()) {
-      // If this is a zero bit operand, just pass a one bit zero.
-      if (!isZeroBitFIRRTLType(operand.getType()))
-        return failure();
-      operands.back() = getOrCreateIntConstant(1, 0);
-    }
+    Value loweredValue = getLoweredFmtOperand(operand);
+    if (!loweredValue)
+      return failure();
+    operands.push_back(loweredValue);
   }
 
   // Emit an "#ifndef SYNTHESIS" guard into the always block.
+  circuitState.addMacroDecl(builder.getStringAttr("SYNTHESIS"));
   addToIfDefBlock("SYNTHESIS", std::function<void()>(), [&]() {
     addToAlwaysBlock(clock, [&]() {
-      circuitState.used_PRINTF_COND = true;
+      circuitState.usedPrintfCond = true;
+      circuitState.addFragment(theModule, "PRINTF_COND_FRAGMENT");
 
       // Emit an "sv.if '`PRINTF_COND_ & cond' into the #ifndef.
       Value ifCond =
@@ -4210,7 +4337,8 @@ LogicalResult FIRRTLLowering::visitStmt(StopOp op) {
   if (!clock || !cond)
     return failure();
 
-  circuitState.used_STOP_COND = true;
+  circuitState.usedStopCond = true;
+  circuitState.addFragment(theModule, "STOP_COND_FRAGMENT");
 
   Value stopCond =
       builder.create<sv::MacroRefExprOp>(cond.getType(), "STOP_COND_");
@@ -4283,18 +4411,7 @@ LogicalResult FIRRTLLowering::lowerVerificationStatement(
   if (auto guardsAttr = op->template getAttrOfType<ArrayAttr>("guards"))
     guards = guardsAttr.getValue();
 
-  auto isAssert = opName == "assert";
-  auto isCover = opName == "cover";
-
-  // TODO : Need to figure out if there is a cleaner way to get the string which
-  // indicates the assert is UNR only. Or better - not rely on this at all -
-  // ideally there should have been some other attribute which indicated that
-  // this assert for UNR only.
-  auto isUnrOnlyAssert = llvm::any_of(guards, [](Attribute attr) {
-    StringAttr strAttr = dyn_cast<StringAttr>(attr);
-    return strAttr && strAttr.getValue() == "USE_UNR_ONLY_CONSTRAINTS";
-  });
-
+  auto isCover = isa<CoverOp>(op);
   auto clock = getLoweredNonClockValue(opClock);
   auto enable = getLoweredValue(opEnable);
   auto predicate = getLoweredValue(opPredicate);
@@ -4311,32 +4428,50 @@ LogicalResult FIRRTLLowering::lowerVerificationStatement(
 
   StringAttr message;
   SmallVector<Value> messageOps;
+  VerificationFlavor flavor = circuitState.verificationFlavor;
+
+  // For non-assertion, rollback to per-op configuration.
+  if (flavor == VerificationFlavor::IfElseFatal && !isa<AssertOp>(op))
+    flavor = VerificationFlavor::None;
+
+  if (flavor == VerificationFlavor::None) {
+    // TODO: This should *not* be part of the op, but rather a lowering
+    // option that the user of this pass can choose.
+
+    auto format = op->getAttrOfType<StringAttr>("format");
+    // if-else-fatal iff concurrent and the format is specified.
+    if (isConcurrent && format && format.getValue() == "ifElseFatal") {
+      if (!isa<AssertOp>(op))
+        return op->emitError()
+               << "ifElseFatal format cannot be used for non-assertions";
+      flavor = VerificationFlavor::IfElseFatal;
+    } else if (isConcurrent)
+      flavor = VerificationFlavor::SVA;
+    else
+      flavor = VerificationFlavor::Immediate;
+  }
+
   if (!isCover && opMessageAttr && !opMessageAttr.getValue().empty()) {
     message = opMessageAttr;
     for (auto operand : opOperands) {
-      auto loweredValue = getLoweredValue(operand);
-      if (!loweredValue) {
-        // If this is a zero bit operand, just pass a one bit zero.
-        if (!isZeroBitFIRRTLType(operand.getType()))
-          return failure();
-        loweredValue = getOrCreateIntConstant(1, 0);
-      }
-      // Wrap any message ops in $sampled() to guarantee that these will print
-      // with the same value as when the assertion triggers.  (See SystemVerilog
-      // 2017 spec section 16.9.3 for more information.)  The custom
-      // "ifElseFatal" variant is special cased because this isn't actually a
-      // concurrent assertion.
-      auto format = op->getAttrOfType<StringAttr>("format");
-      if (isConcurrent && (!format || format.getValue() != "ifElseFatal" ||
-                           circuitState.emitChiselAssertsAsSVA))
+      auto loweredValue = getLoweredFmtOperand(operand);
+      if (!loweredValue)
+        return failure();
+
+      // For SVA assert/assume statements, wrap any message ops in $sampled() to
+      // guarantee that these will print with the same value as when the
+      // assertion triggers.  (See SystemVerilog 2017 spec section 16.9.3 for
+      // more information.)
+      if (flavor == VerificationFlavor::SVA)
         loweredValue = builder.create<sv::SampledOp>(loweredValue);
       messageOps.push_back(loweredValue);
     }
   }
 
   auto emit = [&]() {
-    // Handle the purely procedural flavor of the operation.
-    if (!isConcurrent && !circuitState.emitChiselAssertsAsSVA) {
+    switch (flavor) {
+    case VerificationFlavor::Immediate: {
+      // Handle the purely procedural flavor of the operation.
       auto deferImmediate = circt::sv::DeferAssertAttr::get(
           builder.getContext(), circt::sv::DeferAssert::Immediate);
       addToAlwaysBlock(clock, [&]() {
@@ -4347,23 +4482,24 @@ LogicalResult FIRRTLLowering::lowerVerificationStatement(
       });
       return;
     }
-
-    auto boolType = IntegerType::get(builder.getContext(), 1);
-
-    // Handle the `ifElseFatal` format, which does not emit an SVA but
-    // rather a process that uses $error and $fatal to perform the checks.
-    // TODO: This should *not* be part of the op, but rather a lowering
-    // option that the user of this pass can choose.
-    auto format = op->template getAttrOfType<StringAttr>("format");
-    if (format && (format.getValue() == "ifElseFatal" &&
-                   !circuitState.emitChiselAssertsAsSVA)) {
+    case VerificationFlavor::IfElseFatal: {
+      assert(isa<AssertOp>(op) && "only assert is expected");
+      // Handle the `ifElseFatal` format, which does not emit an SVA but
+      // rather a process that uses $error and $fatal to perform the checks.
+      auto boolType = IntegerType::get(builder.getContext(), 1);
       predicate = comb::createOrFoldNot(predicate, builder, /*twoState=*/true);
       predicate = builder.createOrFold<comb::AndOp>(enable, predicate, true);
+
+      circuitState.addMacroDecl(builder.getStringAttr("SYNTHESIS"));
       addToIfDefBlock("SYNTHESIS", {}, [&]() {
         addToAlwaysBlock(clock, [&]() {
           addIfProceduralBlock(predicate, [&]() {
-            circuitState.used_ASSERT_VERBOSE_COND = true;
-            circuitState.used_STOP_COND = true;
+            circuitState.usedStopCond = true;
+            circuitState.addFragment(theModule, "STOP_COND_FRAGMENT");
+
+            circuitState.usedAssertVerboseCond = true;
+            circuitState.addFragment(theModule, "ASSERT_VERBOSE_COND_FRAGMENT");
+
             addIfProceduralBlock(
                 builder.create<sv::MacroRefExprOp>(boolType,
                                                    "ASSERT_VERBOSE_COND_"),
@@ -4376,84 +4512,48 @@ LogicalResult FIRRTLLowering::lowerVerificationStatement(
       });
       return;
     }
+    case VerificationFlavor::SVA: {
+      // Formulate the `enable -> predicate` as `!enable | predicate`.
+      // Except for covers, combine them: enable & predicate
+      if (!isCover) {
+        auto notEnable =
+            comb::createOrFoldNot(enable, builder, /*twoState=*/true);
+        predicate =
+            builder.createOrFold<comb::OrOp>(notEnable, predicate, true);
+      } else {
+        predicate = builder.createOrFold<comb::AndOp>(enable, predicate, true);
+      }
 
-    // Formulate the `enable -> predicate` as `!enable | predicate`.
-    // Except for covers, combine them: enable & predicate
-    if (!isCover) {
-      auto notEnable =
-          comb::createOrFoldNot(enable, builder, /*twoState=*/true);
-      predicate = builder.createOrFold<comb::OrOp>(notEnable, predicate, true);
-    } else {
-      predicate = builder.createOrFold<comb::AndOp>(enable, predicate, true);
+      // Handle the regular SVA case.
+      sv::EventControl event;
+      switch (opEventControl) {
+      case EventControl::AtPosEdge:
+        event = circt::sv::EventControl::AtPosEdge;
+        break;
+      case EventControl::AtEdge:
+        event = circt::sv::EventControl::AtEdge;
+        break;
+      case EventControl::AtNegEdge:
+        event = circt::sv::EventControl::AtNegEdge;
+        break;
+      }
+
+      buildConcurrentVerifOp(
+          builder, opName,
+          circt::sv::EventControlAttr::get(builder.getContext(), event), clock,
+          predicate, prefixedLabel, message, messageOps);
+      return;
     }
-
-    // Handle the regular SVA case.
-    sv::EventControl event;
-    switch (opEventControl) {
-    case EventControl::AtPosEdge:
-      event = circt::sv::EventControl::AtPosEdge;
-      break;
-    case EventControl::AtEdge:
-      event = circt::sv::EventControl::AtEdge;
-      break;
-    case EventControl::AtNegEdge:
-      event = circt::sv::EventControl::AtNegEdge;
-      break;
-    }
-
-    buildConcurrentVerifOp(
-        builder, opName,
-        circt::sv::EventControlAttr::get(builder.getContext(), event), clock,
-        predicate, prefixedLabel, message, messageOps);
-
-    // Assertions gain a companion `assume` behind a
-    // `USE_PROPERTY_AS_CONSTRAINT` guard.
-    if (isAssert) {
-      StringAttr assumeLabel;
-      if (label)
-        assumeLabel = StringAttr::get(builder.getContext(),
-                                      "assume__" + label.getValue());
-      addToIfDefBlock("USE_PROPERTY_AS_CONSTRAINT", [&]() {
-        if (!isUnrOnlyAssert) {
-          builder.create<sv::AssumeConcurrentOp>(
-              circt::sv::EventControlAttr::get(builder.getContext(), event),
-              clock, predicate, assumeLabel);
-        } else {
-          builder.create<sv::AlwaysOp>(
-              ArrayRef(sv::EventControl::AtEdge), ArrayRef(predicate), [&]() {
-                buildImmediateVerifOp(builder, "assume", predicate,
-                                      circt::sv::DeferAssertAttr::get(
-                                          builder.getContext(),
-                                          circt::sv::DeferAssert::Immediate),
-                                      assumeLabel);
-              });
-        }
-      });
+    case VerificationFlavor::None:
+      llvm_unreachable(
+          "flavor `None` must be converted into one of concreate flavors");
     }
   };
 
   // Wrap the verification statement up in the optional preprocessor
   // guards. This is a bit awkward since we want to translate an array of
   // guards  into a recursive call to `addToIfDefBlock`.
-  bool anyFailed = false;
-  std::function<void()> emitWrapped = [&]() {
-    if (guards.empty()) {
-      emit();
-      return;
-    }
-    auto guard = guards[0].dyn_cast<StringAttr>();
-    if (!guard) {
-      op->emitOpError("elements in `guards` array must be `StringAttr`");
-      anyFailed = true;
-      return;
-    }
-    guards = guards.drop_front();
-    addToIfDefBlock(guard.getValue(), emitWrapped);
-  };
-  emitWrapped();
-  if (anyFailed)
-    return failure();
-  return success();
+  return emitGuards(op->getLoc(), guards, emit);
 }
 
 // Lower an assert to SystemVerilog.
@@ -4478,6 +4578,56 @@ LogicalResult FIRRTLLowering::visitStmt(CoverOp op) {
       op, "cover__", op.getClock(), op.getPredicate(), op.getEnable(),
       op.getMessageAttr(), op.getSubstitutions(), op.getNameAttr(),
       op.getIsConcurrent(), op.getEventControl());
+}
+
+// Lower an UNR only assume to a specific style of SV assume.
+LogicalResult FIRRTLLowering::visitStmt(UnclockedAssumeIntrinsicOp op) {
+  // TODO : Need to figure out if there is a cleaner way to get the string which
+  // indicates the assert is UNR only. Or better - not rely on this at all -
+  // ideally there should have been some other attribute which indicated that
+  // this assert for UNR only.
+  auto guardsAttr = op->getAttrOfType<mlir::ArrayAttr>("guards");
+  ArrayRef<Attribute> guards =
+      guardsAttr ? guardsAttr.getValue() : ArrayRef<Attribute>();
+
+  auto label = op.getNameAttr();
+  StringAttr assumeLabel;
+  if (label)
+    assumeLabel =
+        StringAttr::get(builder.getContext(), "assume__" + label.getValue());
+  auto predicate = getLoweredValue(op.getPredicate());
+  auto enable = getLoweredValue(op.getEnable());
+  auto notEnable = comb::createOrFoldNot(enable, builder, /*twoState=*/true);
+  predicate = builder.createOrFold<comb::OrOp>(notEnable, predicate, true);
+
+  SmallVector<Value> messageOps;
+  for (auto operand : op.getSubstitutions()) {
+    auto loweredValue = getLoweredValue(operand);
+    if (!loweredValue) {
+      // If this is a zero bit operand, just pass a one bit zero.
+      if (!isZeroBitFIRRTLType(operand.getType()))
+        return failure();
+      loweredValue = getOrCreateIntConstant(1, 0);
+    }
+    messageOps.push_back(loweredValue);
+  }
+  return emitGuards(op.getLoc(), guards, [&]() {
+    builder.create<sv::AlwaysOp>(
+        ArrayRef(sv::EventControl::AtEdge), ArrayRef(predicate), [&]() {
+          if (op.getMessageAttr().getValue().empty())
+            buildImmediateVerifOp(
+                builder, "assume", predicate,
+                circt::sv::DeferAssertAttr::get(
+                    builder.getContext(), circt::sv::DeferAssert::Immediate),
+                assumeLabel);
+          else
+            buildImmediateVerifOp(
+                builder, "assume", predicate,
+                circt::sv::DeferAssertAttr::get(
+                    builder.getContext(), circt::sv::DeferAssert::Immediate),
+                assumeLabel, op.getMessageAttr(), messageOps);
+        });
+  });
 }
 
 LogicalResult FIRRTLLowering::visitStmt(AttachOp op) {
@@ -4526,6 +4676,8 @@ LogicalResult FIRRTLLowering::visitStmt(AttachOp op) {
 
   // If the attach operands contain a port, then we can't do anything to
   // simplify the attach operation.
+  circuitState.addMacroDecl(builder.getStringAttr("SYNTHESIS"));
+  circuitState.addMacroDecl(builder.getStringAttr("VERILATOR"));
   addToIfDefBlock(
       "SYNTHESIS",
       // If we're doing synthesis, we emit an all-pairs assign complex.
@@ -4544,7 +4696,7 @@ LogicalResult FIRRTLLowering::visitStmt(AttachOp op) {
       // statement.
       [&]() {
         builder.create<sv::IfDefOp>(
-            "verilator",
+            "VERILATOR",
             [&]() {
               builder.create<sv::VerbatimOp>(
                   "`error \"Verilator does not support alias and thus "

@@ -506,7 +506,9 @@ firrtl.module @Mux(in %in: !firrtl.uint<4>,
                    out %out1: !firrtl.uint<1>,
                    out %out2: !firrtl.uint<0>,
                    out %out3: !firrtl.uint<1>,
-                   out %out4: !firrtl.uint<4>) {
+                   out %out4: !firrtl.uint<4>,
+                   out %out5: !firrtl.uint<1>,
+                   out %out6: !firrtl.uint<1>) {
   // CHECK: firrtl.strictconnect %out, %in
   %0 = firrtl.int.mux2cell (%cond, %in, %in) : (!firrtl.uint<1>, !firrtl.uint<4>, !firrtl.uint<4>) -> !firrtl.uint<4>
   firrtl.connect %out, %0 : !firrtl.uint<4>, !firrtl.uint<4>
@@ -560,6 +562,15 @@ firrtl.module @Mux(in %in: !firrtl.uint<4>,
   // CHECK-NEXT: [[V2:%.+]] = firrtl.mux(%cond
   // CHECK-NEXT: firrtl.strictconnect %out4, [[V2]]
   firrtl.connect %out4, %15 : !firrtl.uint<4>, !firrtl.uint<4>
+
+  // CHECK-NEXT: firrtl.strictconnect %out5, %val2
+  %16 = firrtl.mux (%val0, %val1, %val2) : (!firrtl.uint<0>, !firrtl.uint<1>, !firrtl.uint<1>) -> !firrtl.uint<1>
+  firrtl.strictconnect %out5, %16 : !firrtl.uint<1>
+
+  // CHECK-NEXT: %[[SEL:.+]] = firrtl.pad %val1, 2 : (!firrtl.uint<1>) -> !firrtl.uint<2>
+  // CHECK-NEXT: mux4cell(%[[SEL]],
+  %17 = firrtl.int.mux4cell (%val1, %val1, %val2, %val1, %val2) : (!firrtl.uint<1>, !firrtl.uint<1>, !firrtl.uint<1>, !firrtl.uint<1>, !firrtl.uint<1>) -> !firrtl.uint<1>
+  firrtl.strictconnect %out6, %17 : !firrtl.uint<1>
 }
 
 // CHECK-LABEL: firrtl.module @Pad
@@ -2842,6 +2853,8 @@ firrtl.module @Verification(in %clock: !firrtl.clock, in %p: !firrtl.uint<1>, ou
   firrtl.assert %clock, %p, %c0, "assert0" : !firrtl.clock, !firrtl.uint<1>, !firrtl.uint<1>
   // CHECK-NOT: firrtl.assume
   firrtl.assume %clock, %p, %c0, "assume0" : !firrtl.clock, !firrtl.uint<1>, !firrtl.uint<1>
+  // CHECK-NOT: firrtl.int.unclocked_assume
+  firrtl.int.unclocked_assume %p, %c0, "assume_edged0" : !firrtl.uint<1>, !firrtl.uint<1>
   // CHECK-NOT: firrtl.cover
   firrtl.cover %clock, %p, %c0, "cover0" : !firrtl.clock, !firrtl.uint<1>, !firrtl.uint<1>
 
@@ -2850,6 +2863,8 @@ firrtl.module @Verification(in %clock: !firrtl.clock, in %p: !firrtl.uint<1>, ou
   firrtl.assert %clock, %c1, %p, "assert1" : !firrtl.clock, !firrtl.uint<1>, !firrtl.uint<1>
   // CHECK-NOT: firrtl.assume
   firrtl.assume %clock, %c1, %p, "assume1" : !firrtl.clock, !firrtl.uint<1>, !firrtl.uint<1>
+  // CHECK-NOT: firrtl.int.unclocked_assume
+  firrtl.int.unclocked_assume %c1, %p, "assume_edged1" : !firrtl.uint<1>, !firrtl.uint<1>
   // CHECK-NOT: firrtl.cover
   firrtl.cover %clock, %c0, %p, "cover0" : !firrtl.clock, !firrtl.uint<1>, !firrtl.uint<1>
   // CHECK-NOT: firrtl.int.isX

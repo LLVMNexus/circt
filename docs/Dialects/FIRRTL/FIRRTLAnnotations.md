@@ -858,19 +858,6 @@ Example:
 }
 ```
 
-### circt.Intrinsic
-
-| Property   | Type   | Description       |
-| ---------- | ------ | -------------     |
-| class      | string | `circt.Intrinsic` |
-| target     | string | Reference target  |
-| intrinsic  | string | Name of Intrinsic |
-
-Used to indicate an external module is really an intrinsic module.  This exists
-to allow a frontend to generate intrinsics without FIRRTL language support for
-intrinsics.  It is expected this will be deprecated as soon as the FIRRTL language
-supports intrinsics.  This annotation can only be local and applied to a module.
-
 ### SitestBlackBoxAnnotation
 
 | Property   | Type   | Description                                         |
@@ -908,32 +895,6 @@ Example:
 {
   "class":"sifive.enterprise.firrtl.SitestTestHarnessBlackBoxAnnotation",
   "filename":"./testharness_blackboxes.json"
-}
-```
-
-### SubCircuitsTargetDirectory
-
-| Property   | Type   | Description                                                        |
-| ---------- | ------ | -------------                                                      |
-| class      | string | `sifive.enterprise.grandcentral.phases.SubCircuitsTargetDirectory` |
-| dir        | string | The sub-circuit output directory                                   |
-
-This annotation is used to indicate the directory to serialize sub-circuits to
-by GrandCentral. Sub-circuits will be put in subdirectories of `dir`, named by
-their `circuitPackage` field.
-
-In the Scala FIRRTL compiler this is attached to the circuit with the
-commandline option `sub-circuits-target-dir`.
-```
--sub-circuit-targets-dir <dir>
--sctd <dir>
-```
-
-Example:
-```json
-{
-  "class":"sifive.enterprise.grandcentral.phases.SubCircuitsTargetDirectory",
-  "dir":"verilog/verif.subcircuits"
 }
 ```
 

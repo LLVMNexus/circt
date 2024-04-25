@@ -210,7 +210,10 @@ public:
   InstanceGraphNode *operator[](ModuleOpInterface op) { return lookup(op); }
 
   /// Check if child is instantiated by a parent.
-  bool isAncestor(ModuleOpInterface child, ModuleOpInterface parent);
+  bool isAncestor(
+      ModuleOpInterface child, ModuleOpInterface parent,
+      llvm::function_ref<bool(InstanceRecord *)> skipInstance =
+          [](InstanceRecord *_) { return false; });
 
   /// Get the node corresponding to the top-level module of a circuit.
   virtual InstanceGraphNode *getTopLevelNode() { return nullptr; }
@@ -330,6 +333,8 @@ struct InstancePathCache {
   explicit InstancePathCache(InstanceGraph &instanceGraph)
       : instanceGraph(instanceGraph) {}
   ArrayRef<InstancePath> getAbsolutePaths(ModuleOpInterface op);
+  ArrayRef<InstancePath> getAbsolutePaths(ModuleOpInterface op,
+                                          InstanceGraphNode *top);
 
   /// Replace an InstanceOp. This is required to keep the cache updated.
   void replaceInstance(InstanceOpInterface oldOp, InstanceOpInterface newOp);

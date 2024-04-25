@@ -35,14 +35,14 @@ def FileOp : EmitOp<"file", [
     filename through an optional symbol.
   }];
 
-  let regions = (region SizedRegion<1>:$body);
+  let regions = (region SizedRegion<1>:$bodyRegion);
   let arguments = (ins
     StrAttr:$file_name,
     OptionalAttr<SymbolNameAttr>:$sym_name
   );
   let results = (outs);
 
-  let assemblyFormat = "$file_name (`sym` $sym_name^)? $body attr-dict";
+  let assemblyFormat = "$file_name (`sym` $sym_name^)? $bodyRegion attr-dict";
 
   let skipDefaultBuilders = 1;
   let builders = [
@@ -53,7 +53,7 @@ def FileOp : EmitOp<"file", [
     OpBuilder<(ins "StringAttr":$fileName,
                     CArg<"llvm::function_ref<void()>">:$bodyCtor)>,
     OpBuilder<(ins "const Twine &":$fileName,
-                    CArg<"llvm::function_ref<void()>">:$bodyCtor), [{
+                    CArg<"llvm::function_ref<void()>", "{}">:$bodyCtor), [{
       return build($_builder, $_state, $_builder.getStringAttr(fileName), bodyCtor);
     }]>
   ];
@@ -61,10 +61,44 @@ def FileOp : EmitOp<"file", [
   let extraClassDeclaration = [{
     // SymbolOpInterface
     static bool isOptionalSymbol() { return true; }
-
-    // Utilities
-    Block *getBodyBlock() { return &getBodyRegion().front(); }
   }];
+}
+
+def FragmentOp : EmitOp<"fragment", [
+    Symbol,
+    SingleBlock,
+    NoTerminator,
+    NoRegionArguments,
+    IsolatedFromAbove,
+    HasParent<"mlir::ModuleOp">
+]> {
+  let summary = "Emittable fragment which can be replicated before modules";
+  let description = [{
+    The fragment operation is a container for other operations that can
+    be emitted before other operations. It carries a symbol that can be
+    referenced by an `emit.fragments` attribute placed on operations before
+    which the fragments should be inserted.
+
+    In single-file mode, each fragment is emitted once. In split file emission
+    mode, fragments precede all operations that reference them, but are still
+    emitted at most once per file.
+  }];
+
+  let regions = (region SizedRegion<1>:$bodyRegion);
+  let arguments = (ins SymbolNameAttr:$sym_name);
+
+  let assemblyFormat = "$sym_name $bodyRegion attr-dict";
+
+  let skipDefaultBuilders = 1;
+  let builders = [
+    OpBuilder<(ins "StringRef":$symName,
+                    CArg<"llvm::function_ref<void()>", "{}">:$bodyCtor), [{
+      return build(
+          $_builder, $_state, $_builder.getStringAttr(symName), bodyCtor);
+    }]>,
+    OpBuilder<(ins "StringAttr":$symName,
+                    CArg<"llvm::function_ref<void()>", "{}">:$bodyCtor)>,
+  ];
 }
 
 def VerbatimOp : EmitOp<"verbatim", [HasParent<"circt::emit::FileOp">]> {
@@ -84,6 +118,23 @@ def VerbatimOp : EmitOp<"verbatim", [HasParent<"circt::emit::FileOp">]> {
   }];
 }
 
+def RefOp : EmitOp<"ref", [
+  HasParent<"circt::emit::FileOp">,
+  DeclareOpInterfaceMethods<SymbolUserOpInterface>
+]> {
+  let summary = "Print a referenced SV operation inline into the file";
+  let description = [{
+    The `emit.ref` operation targets an op via a symbol, emitting its
+    contents into the file it is part of. The set of targetable
+    operations and the emission rules are defined in ExportVerilog.
+  }];
+
+  let arguments = (ins FlatSymbolRefAttr:$target);
+
+  let assemblyFormat = [{
+    $target attr-dict
+  }];
+}
 
 def FileListOp : EmitOp<"file_list", [
     Symbol,

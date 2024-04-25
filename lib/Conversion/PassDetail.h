@@ -10,6 +10,7 @@
 #ifndef CONVERSION_PASSDETAIL_H
 #define CONVERSION_PASSDETAIL_H
 
+#include "circt/Conversion/FIRRTLToHW.h"
 #include "circt/Support/LoweringOptions.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/DialectRegistry.h"
@@ -100,6 +101,10 @@ namespace comb {
 class CombDialect;
 } // namespace comb
 
+namespace emit {
+class EmitDialect;
+} // namespace emit
+
 namespace hw {
 class HWDialect;
 class HWModuleOp;
@@ -128,6 +133,10 @@ class SVDialect;
 namespace fsm {
 class FSMDialect;
 } // namespace fsm
+
+namespace smt {
+class SMTDialect;
+} // namespace smt
 
 namespace systemc {
 class SystemCDialect;

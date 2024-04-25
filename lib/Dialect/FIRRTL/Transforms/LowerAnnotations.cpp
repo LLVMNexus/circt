@@ -414,7 +414,6 @@ static llvm::StringMap<AnnoRecord> annotationRecords{{
     {"circt.testLocalOnly", {stdResolve, applyWithoutTarget<>}},
     {"circt.testNT", {noResolve, applyWithoutTarget<>}},
     {"circt.missing", {tryResolve, applyWithoutTarget<true>}},
-    {"circt.Intrinsic", {stdResolve, applyWithoutTarget<false, FExtModuleOp>}},
     // Grand Central Views/Interfaces Annotations
     {extractGrandCentralClass, NoTargetAnnotation},
     {grandCentralHierarchyFileAnnoClass, NoTargetAnnotation},
@@ -476,7 +475,6 @@ static llvm::StringMap<AnnoRecord> annotationRecords{{
     {verifBlackBoxAnnoClass,
      {stdResolve, applyWithoutTarget<false, FExtModuleOp>}},
     {elaborationArtefactsDirectoryAnnoClass, NoTargetAnnotation},
-    {subCircuitsTargetDirectoryAnnoClass, NoTargetAnnotation},
     {retimeModulesFileAnnoClass, NoTargetAnnotation},
     {retimeModuleAnnoClass,
      {stdResolve, applyWithoutTarget<false, FModuleOp, FExtModuleOp>}},
@@ -487,12 +485,9 @@ static llvm::StringMap<AnnoRecord> annotationRecords{{
     {testHarnessHierAnnoClass, NoTargetAnnotation},
     {testHarnessPathAnnoClass, NoTargetAnnotation},
     {prefixInterfacesAnnoClass, NoTargetAnnotation},
-    {subCircuitDirAnnotation, NoTargetAnnotation},
     {extractAssertAnnoClass, NoTargetAnnotation},
     {extractAssumeAnnoClass, NoTargetAnnotation},
     {extractCoverageAnnoClass, NoTargetAnnotation},
-    {dftTestModeEnableAnnoClass, {stdResolve, applyWithoutTarget<true>}},
-    {dftClockDividerBypassAnnoClass, {stdResolve, applyWithoutTarget<true>}},
     {runFIRRTLTransformAnnoClass, {noResolve, drop}},
     {mustDedupAnnoClass, NoTargetAnnotation},
     {addSeqMemPortAnnoClass, NoTargetAnnotation},
@@ -860,7 +855,7 @@ LogicalResult LowerAnnotationsPass::solveWiringProblems(ApplyState &state) {
       // Otherwise they must be identical or FIRRTL type-equivalent
       // (connectable).
       if (sourceFType != sinkFType &&
-          !areTypesEquivalent(sourceFType, sinkFType)) {
+          !areTypesEquivalent(sinkFType, sourceFType)) {
         auto diag = mlir::emitError(source.getLoc())
                     << "Wiring Problem source type " << sourceType
                     << " does not match sink type " << sinkType;

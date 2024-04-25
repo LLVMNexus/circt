@@ -857,7 +857,6 @@ void InferResetsPass::traceResets(InstanceOp inst) {
   LLVM_DEBUG(llvm::dbgs() << "Visiting instance " << inst.getName() << "\n");
 
   // Establish a connection between the instance ports and module ports.
-  auto dirs = module.getPortDirections();
   for (const auto &it : llvm::enumerate(inst.getResults())) {
     auto dir = module.getPortDirection(it.index());
     Value dstPort = module.getArgument(it.index());
@@ -1309,7 +1308,7 @@ InferResetsPass::collectAnnos(FModuleOp module) {
       reset = arg;
       conflictingAnnos.insert({anno, reset.getLoc()});
 
-      return true;
+      return false;
     }
     if (anno.isClass(ignoreFullAsyncResetAnnoClass)) {
       anyFailed = true;
@@ -1351,7 +1350,7 @@ InferResetsPass::collectAnnos(FModuleOp module) {
         }
         reset = op->getResult(0);
         conflictingAnnos.insert({anno, reset.getLoc()});
-        return true;
+        return false;
       }
       if (anno.isClass(ignoreFullAsyncResetAnnoClass)) {
         anyFailed = true;

@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "circt/Dialect/Emit/EmitOps.h"
+#include "circt/Dialect/Emit/EmitOpInterfaces.h"
 
 using namespace mlir;
 using namespace circt;
@@ -45,6 +46,37 @@ void FileOp::build(OpBuilder &builder, OperationState &result,
   builder.createBlock(result.addRegion());
   if (bodyCtor)
     bodyCtor();
+}
+
+//===----------------------------------------------------------------------===//
+// FragmentOp
+//===----------------------------------------------------------------------===//
+
+void FragmentOp::build(OpBuilder &builder, OperationState &result,
+                       StringAttr symName,
+                       llvm::function_ref<void()> bodyCtor) {
+  OpBuilder::InsertionGuard guard(builder);
+
+  auto &props = result.getOrAddProperties<Properties>();
+  props.sym_name = symName;
+
+  builder.createBlock(result.addRegion());
+  if (bodyCtor)
+    bodyCtor();
+}
+
+//===----------------------------------------------------------------------===//
+// RefOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult RefOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+  auto target = getTargetAttr();
+  auto *op = symbolTable.lookupNearestSymbolFrom(getOperation(), target);
+  if (!op)
+    return emitError("invalid symbol reference: ") << target;
+  if (!op->hasTrait<emit::Emittable>())
+    return emitError("does not target an emittable op: ") << target;
+  return success();
 }
 
 //===----------------------------------------------------------------------===//

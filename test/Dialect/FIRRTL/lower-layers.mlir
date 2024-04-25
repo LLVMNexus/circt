@@ -481,6 +481,8 @@ firrtl.circuit "CaptureHardwareMultipleTimes" {
     firrtl.layer @B bind {}
   }
 
+  firrtl.extmodule @CaptureHardwareMultipleTimes ()
+
   // CHECK: firrtl.module private @[[A:.+]](in %[[p:.+]]: !firrtl.uint<1>) {
   // CHECK:   %0 = firrtl.add %[[p]], %[[p]] : (!firrtl.uint<1>, !firrtl.uint<1>) -> !firrtl.uint<2>
   // CHECK: }
@@ -551,6 +553,7 @@ firrtl.circuit "CaptureHardwareMultipleTimes" {
 // https://github.com/llvm/circt/issues/6717
 
 firrtl.circuit "HierPathOps" {
+  firrtl.extmodule @HierPathOps ()
   hw.hierpath @nla1 [@Foo::@foo_A]
   hw.hierpath @nla2 [@Foo::@bar, @Bar]
   hw.hierpath private @nla3 [@Foo::@baz]
@@ -578,3 +581,47 @@ firrtl.circuit "HierPathOps" {
 // CHECK:         firrtl.module @Foo()
 // CHECK-NEXT:      firrtl.wire sym @foo_A :
 // CHECK-NEXT:      firrtl.instance {{.*}} sym @[[inst_sym]]
+
+// -----
+// Check the output file behavior when both a DUT and a testbench directory are
+// specified.  In the test below, Foo is the testbench and Bar is the DUT.
+
+firrtl.circuit "Foo" attributes {
+  annotations = [
+    {
+      class = "sifive.enterprise.firrtl.TestBenchDirAnnotation",
+      dirname = "testbench"
+    }
+  ]
+} {
+  firrtl.layer @A  bind {}
+  firrtl.module @Bar() attributes {
+    annotations = [
+      {
+        class = "sifive.enterprise.firrtl.MarkDUTAnnotation"
+      }
+    ]
+  } {
+    firrtl.layerblock @A {
+      %a = firrtl.wire : !firrtl.uint<1>
+    }
+  }
+  firrtl.module @Foo() {
+    firrtl.layerblock @A {
+      %a = firrtl.wire : !firrtl.uint<1>
+    }
+  }
+}
+
+// CHECK-LABEL: firrtl.circuit "Foo"
+//
+// CHECK:       sv.verbatim
+// CHECK-SAME:    #hw.output_file<"testbench{{/|\\\\}}layers_Foo_A.sv", excludeFromFileList>
+//
+// CHECK:       firrtl.module {{.*}} @Bar_A
+// CHECK-SAME:    #hw.output_file<"testbench{{/|\\\\}}", excludeFromFileList>
+// CHECK:       firrtl.module {{.*}} @Foo_A
+// CHECK-SAME:    #hw.output_file<"testbench{{/|\\\\}}", excludeFromFileList>
+//
+// CHECK:       sv.verbatim
+// CHECK-SAME:    #hw.output_file<"testbench{{/|\\\\}}layers_Foo_A.sv", excludeFromFileList>

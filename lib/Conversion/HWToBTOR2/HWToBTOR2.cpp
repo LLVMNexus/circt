@@ -53,7 +53,6 @@ private:
 
   // Create a counter that attributes a unique id to each generated btor2 line
   size_t lid = 1;          // btor2 line identifiers usually start at 1
-  size_t resetLID = noLID; // keeps track of the reset's LID
   size_t nclocks = 0;
 
   // Create maps to keep track of lid associations
@@ -158,8 +157,14 @@ private:
   Operation *getOpAlias(Operation *op) {
 
     // Remove the alias until none are left (for wires of wires of wires ...)
-    if (auto it = opAliasMap.find(op); it != opAliasMap.end())
+    if (auto it = opAliasMap.find(op); it != opAliasMap.end()) {
+      // check for aliases of inputs
+      if (!it->second) {
+        op->emitError("BTOR2 emission does not support for wires of inputs!");
+        return op;
+      }
       return it->second;
+    }
 
     // If the op isn't an alias then simply return it
     return op;
@@ -270,6 +275,21 @@ private:
        << "zero"
        << " " << sid << "\n";
     return constlid;
+  }
+
+  // Generates an init statement, which allows for the use of powerOnValue
+  // operands in compreg registers
+  void genInit(Operation *reg, Value initVal, int64_t width) {
+    // Retrieve the various identifiers we require for this
+    size_t regLID = getOpLID(reg);
+    size_t sid = sortToLIDMap.at(width);
+    size_t initValLID = getOpLID(initVal);
+
+    // Build and emit the string (the lid here doesn't need to be associated to
+    // an op as it won't be used)
+    os << lid++ << " "
+       << "init"
+       << " " << sid << " " << regLID << " " << initValLID << "\n";
   }
 
   // Generates a binary operation instruction given an op name, two operands and
@@ -467,16 +487,18 @@ private:
   // transition system conversion
   void finalizeRegVisit(Operation *op) {
     int64_t width;
-    Value next, resetVal;
+    Value next, reset, resetVal;
 
     // Extract the operands depending on the register type
     if (auto reg = dyn_cast<seq::CompRegOp>(op)) {
       width = hw::getBitWidth(reg.getType());
       next = reg.getInput();
+      reset = reg.getReset();
       resetVal = reg.getResetValue();
     } else if (auto reg = dyn_cast<seq::FirRegOp>(op)) {
       width = hw::getBitWidth(reg.getType());
       next = reg.getNext();
+      reset = reg.getReset();
       resetVal = reg.getResetValue();
     } else {
       op->emitError("Invalid register operation !");
@@ -503,16 +525,23 @@ private:
       nextLID = getOpLID(next);
     }
 
-    // Assign a new LID to next
-    setOpLID(next.getDefiningOp());
-
-    // Sanity check: at this point the next operation should have had it's btor2
-    // counterpart emitted if not then something terrible must have happened.
-    assert(nextLID != noLID);
-
     // Check if the register has a reset
-    if (resetLID != noLID) {
+    if (reset) {
       size_t resetValLID = noLID;
+
+      // Check if the reset signal is a port to avoid nullptrs (as done above
+      // with next)
+      size_t resetLID = noLID;
+      if (BlockArgument barg = dyn_cast<BlockArgument>(reset)) {
+        // Extract the block argument index and use that to get the line number
+        size_t argIdx = barg.getArgNumber();
+
+        // Check that the extracted argument is in range before using it
+        resetLID = inputLIDs[argIdx];
+
+      } else {
+        resetLID = getOpLID(reset);
+      }
 
       // Check for a reset value, if none exists assume it's zero
       if (resetVal)
@@ -520,9 +549,21 @@ private:
       else
         resetValLID = genZero(width);
 
+      // Assign a new LID to next
+      setOpLID(next.getDefiningOp());
+
+      // Sanity check: at this point the next operation should have had it's
+      // btor2 counterpart emitted if not then something terrible must have
+      // happened.
+      assert(nextLID != noLID);
+
       // Generate the ite for the register update reset condition
       // i.e. reg <= reset ? 0 : next
       genIte(next.getDefiningOp(), resetLID, resetValLID, nextLID, width);
+    } else {
+      // Assign a new LID to next and perform a sanity check
+      setOpLID(next.getDefiningOp());
+      assert(nextLID != noLID);
     }
 
     // Finally generate the next statement
@@ -554,10 +595,6 @@ public:
       // Record the defining operation's line ID (the module itself in the case
       // of ports)
       inputLIDs[port.argNum] = lid;
-
-      // We assume that the explicit name is always %reset for reset ports
-      if (iName == "reset")
-        resetLID = lid;
 
       // Increment the lid to keep it unique
       lid++;
@@ -778,8 +815,29 @@ public:
     StringRef regName = reg.getName().value();
     int64_t w = requireSort(reg.getType());
 
-    // Generate state instruction (represents the register declaration)
-    genState(reg, w, regName);
+    // Check for initial values which must be emitted before the state in btor2
+    Value pov = reg.getPowerOnValue();
+    if (pov) {
+      // Check that the powerOn value is a non-null constant
+      if (!isa_and_nonnull<hw::ConstantOp>(pov.getDefiningOp()))
+        reg->emitError("PowerOn Value must be constant!!");
+
+      // Visit the powerOn Value to generate the constant
+      dispatchTypeOpVisitor(pov.getDefiningOp());
+
+      // Add it to the list of visited operations
+      handledOps.insert(pov.getDefiningOp());
+
+      // Generate state instruction (represents the register declaration)
+      genState(reg, w, regName);
+
+      // Finally generate the init statement
+      genInit(reg, pov, w);
+
+    } else {
+      // Only generate the state instruction and nothing else
+      genState(reg, w, regName);
+    }
 
     // Record the operation for future `next` instruction generation
     // This is required to model transitions between states (i.e. how a

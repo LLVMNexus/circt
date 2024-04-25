@@ -497,6 +497,14 @@ circuit ConnectWrongType:
     b <= a ; expected-error {{cannot connect non-equivalent type}}
 
 ;// -----
+FIRRTL version 4.0.0
+
+circuit RefStatementDeprecated:
+  extmodule RefStatementDeprecated:
+    output p : Probe<UInt<1>>
+    ref p is "x.y" ; expected-error {{ref statements were removed in FIRRTL 4.0.0, but the specified FIRRTL version was 4.0.0}}
+
+;// -----
 
 FIRRTL version 3.0.0
 circuit ConnectAlternateWrongType:
@@ -790,7 +798,7 @@ circuit UnsupportedVersionGroups:
 
 FIRRTL version 4.1.0
 circuit RemovedGroups:
-  module RemovedGroups:
+  public module RemovedGroups:
     ; expected-error @below {{optional groups were removed in FIRRTL 4.0.0, but the specified FIRRTL version was 4.1.0}}
     group A:
 
@@ -817,7 +825,7 @@ circuit LayerAndCircuitShareName:
   layer LayerAndCircuitShareName, bind :
 
   ; expected-error @below {{redefinition of symbol named 'LayerAndCircuitShareName'}}
-  module LayerAndCircuitShareName:
+  public module LayerAndCircuitShareName:
 
 ;// -----
 
@@ -1180,7 +1188,7 @@ FIRRTL version 4.0.0
 circuit PublicNonModule:
   ; expected-error @below {{only modules may be public}}
   public extmodule Foo:
-  module PublicNonModule:
+  public module PublicNonModule:
 
 ;// -----
 circuit RWProbeExprOOB :
@@ -1228,7 +1236,7 @@ circuit Foo:
   module FPGATarget:
     input clock: UInt<1>
 
-  module Foo:
+  public module Foo:
     ; expected-error @below {{instance case port 'clock' type does not match the default module port}}
     instchoice inst of DefaultTarget, Platform :
       FPGA => FPGATarget
@@ -1246,7 +1254,7 @@ circuit Foo:
   module FPGATarget:
     input x: UInt<1>
 
-  module Foo:
+  public module Foo:
     ; expected-error @below {{instance case module port 'x' does not match the default module port 'clock'}}
     instchoice inst of DefaultTarget, Platform :
       FPGA => FPGATarget
@@ -1261,7 +1269,7 @@ circuit Foo:
   module DefaultTarget:
   module FPGATarget:
 
-  module Foo:
+  public module Foo:
     ; expected-error @below {{use of undefined option case 'ASIC'}}
     instchoice inst of DefaultTarget, Platform :
       ASIC => FPGATarget
@@ -1273,7 +1281,7 @@ circuit Foo:
   module DefaultTarget:
   module FPGATarget:
 
-  module Foo:
+  public module Foo:
     ; expected-error @below {{use of undefined option group 'Platform'}}
     instchoice inst of DefaultTarget, Platform :
       ASIC => FPGATarget
@@ -1299,14 +1307,14 @@ circuit Foo:
 FIRRTL version 4.0.0
 circuit Foo:
   layer A bind:
-  module Foo:
+  public module Foo:
     output a: Probe<
     ; expected-error @below {{expected probe data type}}
 ;// -----
 FIRRTL version 4.0.0
 circuit Foo:
   layer A bind:
-  module Foo:
+  public module Foo:
     ; expected-error @below {{expected '<' in reference type}}
     output a: Probe X
 
@@ -1314,14 +1322,14 @@ circuit Foo:
 FIRRTL version 4.0.0
 circuit Foo:
   layer A bind:
-  module Foo:
+  public module Foo:
     output a: Probe
     ; expected-error @below {{expected '<' in reference type}}
 ;// -----
 FIRRTL version 4.0.0
 circuit Foo:
   layer A bind:
-  module Foo:
+  public module Foo:
     ; expected-error @below {{expected probe data type}}
     output a: Probe<>
 
@@ -1329,14 +1337,14 @@ circuit Foo:
 FIRRTL version 4.0.0
 circuit Foo:
   layer A bind:
-  module Foo:
+  public module Foo:
     ; expected-error @below {{expected '>' to end reference type}}
     output a: Probe<UInt<1>
 ;// -----
 FIRRTL version 4.0.0
 circuit Foo:
   layer A bind:
-  module Foo:
+  public module Foo:
     ; expected-error @below {{expected '>' to end reference type}}
     output a: Probe<UInt<1> A
 
@@ -1344,7 +1352,7 @@ circuit Foo:
 FIRRTL version 4.0.0
 circuit Foo:
   layer A bind:
-  module Foo:
+  public module Foo:
     ; expected-error @below {{expected layer name}}
     output a: Probe<UInt<1> A.>
 
@@ -1365,6 +1373,60 @@ circuit UnknownWidthExt:
 ;// -----
 FIRRTL version 4.0.0
 circuit AbstractResetPublic:
-  module AbstractResetPublic:
+  public module AbstractResetPublic:
     ; expected-error @below {{public module port must have concrete reset type}}
     input r: Reset
+
+;// -----
+FIRRTL version 4.0.0
+circuit PrivateMainModule:
+  ; expected-error @below {{private main modules were removed in FIRRTL 4.0.0}}
+  module PrivateMainModule:
+
+;// -----
+circuit IntModuleNoIntrinsic:
+  intmodule test:
+  ; expected-error @below {{expected 'intrinsic'}}
+  module IntModule:
+
+;// -----
+circuit IntModuleBadIntrinsic:
+  intmodule test:
+    ; expected-error @below {{expected intrinsic name}}
+    intrinsic = 0
+  module IntModule:
+
+;// -----
+FIRRTL version 4.0.0
+circuit GenericIntExprNoRet:
+  public module GenericIntExprNoRet:
+    ; expected-error @below {{expected ':' in intrinsic expression}}
+    node n = intrinsic(dummy)
+
+;// -----
+FIRRTL version 4.0.0
+circuit GenericIntNotPassive:
+  public module GenericIntNotPassive:
+    ; expected-error @below {{must be a passive base type}}
+    intrinsic(dummy : { flip x : UInt<1> })
+
+;// -----
+FIRRTL version 4.0.0
+circuit GenericIntBadId:
+  public module GenericIntBadId:
+    ; expected-error @below {{expected intrinsic identifier}}
+    intrinsic(5)
+
+;// -----
+FIRRTL version 4.0.0
+circuit GenericIntUntermStr:
+  public module GenericIntUntermStr:
+    ; expected-error @below {{unterminated string}}
+    intrinsic<key = "val
+      " ; end for syntax highlighting
+;// -----
+FIRRTL version 4.0.0
+circuit GenericIntParamRedef:
+  public module GenericIntParamRedef:
+    ; expected-error @below {{redefinition of parameter 'x'}}
+    intrinsic(dummy<x = 5, x = 3>)

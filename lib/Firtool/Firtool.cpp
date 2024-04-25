@@ -39,15 +39,17 @@ LogicalResult firtool::populatePreprocessTransforms(mlir::PassManager &pm,
     pm.nest<firrtl::CircuitOp>().addNestedPass<firrtl::FModuleOp>(
         firrtl::createMaterializeDebugInfoPass());
 
+  pm.nest<firrtl::CircuitOp>().addPass(
+      firrtl::createLowerIntmodulesPass(opt.shouldFixupEICGWrapper()));
+  pm.nest<firrtl::CircuitOp>().nest<firrtl::FModuleOp>().addPass(
+      firrtl::createLowerIntrinsicsPass());
+
   return success();
 }
 
 LogicalResult firtool::populateCHIRRTLToLowFIRRTL(mlir::PassManager &pm,
                                                   const FirtoolOptions &opt,
                                                   StringRef inputFilename) {
-  pm.nest<firrtl::CircuitOp>().addPass(
-      firrtl::createLowerIntrinsicsPass(opt.shouldFixupEICGWrapper()));
-
   pm.nest<firrtl::CircuitOp>().addPass(firrtl::createLowerSignaturesPass());
 
   pm.nest<firrtl::CircuitOp>().addPass(firrtl::createInjectDUTHierarchyPass());
@@ -100,9 +102,6 @@ LogicalResult firtool::populateCHIRRTLToLowFIRRTL(mlir::PassManager &pm,
 
   if (opt.shouldDedup())
     pm.nest<firrtl::CircuitOp>().addPass(firrtl::createDedupPass());
-
-  if (opt.shouldRunWireDFT())
-    pm.nest<firrtl::CircuitOp>().addPass(firrtl::createWireDFTPass());
 
   if (opt.shouldConvertVecOfBundle()) {
     pm.addNestedPass<firrtl::CircuitOp>(firrtl::createLowerFIRRTLTypesPass(
@@ -157,6 +156,10 @@ LogicalResult firtool::populateCHIRRTLToLowFIRRTL(mlir::PassManager &pm,
     pm.nest<firrtl::CircuitOp>().addPass(firrtl::createLowerMemoryPass());
 
   pm.nest<firrtl::CircuitOp>().addPass(firrtl::createPrefixModulesPass());
+
+  if (opt.shouldAddCompanionAssume())
+    pm.nest<firrtl::CircuitOp>().nest<firrtl::FModuleOp>().addPass(
+        circt::firrtl::createCreateCompanionAssume());
 
   if (!opt.shouldDisableOptimization()) {
     pm.nest<firrtl::CircuitOp>().addPass(firrtl::createIMConstPropPass());
@@ -246,7 +249,7 @@ LogicalResult firtool::populateLowFIRRTLToHW(mlir::PassManager &pm,
       circt::firrtl::createLintingPass());
 
   pm.addPass(createLowerFIRRTLToHWPass(opt.shouldEnableAnnotationWarning(),
-                                       opt.shouldEmitChiselAssertsAsSVA()));
+                                       opt.getVerificationFlavor()));
 
   if (!opt.shouldDisableOptimization()) {
     auto &modulePM = pm.nest<hw::HWModuleOp>();
@@ -269,7 +272,7 @@ LogicalResult firtool::populateHWToSV(mlir::PassManager &pm,
         opt.shouldEtcDisableModuleInlining()));
 
   pm.addPass(seq::createExternalizeClockGatePass(opt.getClockGateOptions()));
-  pm.addNestedPass<hw::HWModuleOp>(circt::createLowerSimToSVPass());
+  pm.addPass(circt::createLowerSimToSVPass());
   pm.addPass(circt::createLowerSeqToSVPass(
       {/*disableRegRandomization=*/!opt.isRandomEnabled(
            FirtoolOptions::RandomKind::Reg),
@@ -483,13 +486,6 @@ struct FirtoolCmdOptions {
       llvm::cl::desc("Disable deduplication of structurally identical modules"),
       llvm::cl::init(false)};
 
-  llvm::cl::opt<bool> runWireDFT{
-      "run-wire-dft",
-      llvm::cl::desc("Run the now-deprecated WireDFT transform"),
-      llvm::cl::init(false),
-      llvm::cl::Hidden,
-  };
-
   llvm::cl::opt<firrtl::CompanionMode> companionMode{
       "grand-central-companion-mode",
       llvm::cl::desc("Specifies the handling of Grand Central companions"),
@@ -589,10 +585,18 @@ struct FirtoolCmdOptions {
       llvm::cl::desc("Annotate mux pragmas for memory array access"),
       llvm::cl::init(false)};
 
-  llvm::cl::opt<bool> emitChiselAssertsAsSVA{
-      "emit-chisel-asserts-as-sva",
-      llvm::cl::desc("Convert all chisel asserts into SVA"),
-      llvm::cl::init(false)};
+  llvm::cl::opt<firrtl::VerificationFlavor> verificationFlavor{
+      "verification-flavor",
+      llvm::cl::desc("Specify a verification flavor used in LowerFIRRTLToHW"),
+      llvm::cl::values(
+          clEnumValN(firrtl::VerificationFlavor::None, "none",
+                     "Use the flavor specified by the op"),
+          clEnumValN(firrtl::VerificationFlavor::IfElseFatal, "if-else-fatal",
+                     "Use Use `if(cond) else $fatal(..)` format"),
+          clEnumValN(firrtl::VerificationFlavor::Immediate, "immediate",
+                     "Use immediate verif statements"),
+          clEnumValN(firrtl::VerificationFlavor::SVA, "sva", "Use SVA")),
+      llvm::cl::init(firrtl::VerificationFlavor::None)};
 
   llvm::cl::opt<bool> emitSeparateAlwaysBlocks{
       "emit-separate-always-blocks",
@@ -670,6 +674,11 @@ struct FirtoolCmdOptions {
       "fixup-eicg-wrapper",
       llvm::cl::desc("Lower `EICG_wrapper` modules into clock gate intrinsics"),
       llvm::cl::init(false)};
+
+  llvm::cl::opt<bool> addCompanionAssume{
+      "add-companion-assume",
+      llvm::cl::desc("Add companion assumes to assertions"),
+      llvm::cl::init(false)};
 };
 } // namespace
 
@@ -691,22 +700,22 @@ circt::firtool::FirtoolOptions::FirtoolOptions()
       preserveMode(firrtl::PreserveValues::None), enableDebugInfo(false),
       buildMode(BuildModeRelease), disableOptimization(false),
       exportChiselInterface(false), chiselInterfaceOutDirectory(""),
-      vbToBV(false), noDedup(false), runWireDFT(false),
-      companionMode(firrtl::CompanionMode::Bind),
+      vbToBV(false), noDedup(false), companionMode(firrtl::CompanionMode::Bind),
       disableAggressiveMergeConnections(false),
       disableHoistingHWPassthrough(true), emitOMIR(true), omirOutFile(""),
       lowerMemories(false), blackBoxRootPath(""), replSeqMem(false),
       replSeqMemFile(""), extractTestCode(false), ignoreReadEnableMem(false),
       disableRandom(RandomKind::None), outputAnnotationFilename(""),
       enableAnnotationWarning(false), addMuxPragmas(false),
-      emitChiselAssertsAsSVA(false), emitSeparateAlwaysBlocks(false),
-      etcDisableInstanceExtraction(false), etcDisableRegisterExtraction(false),
-      etcDisableModuleInlining(false),
+      verificationFlavor(firrtl::VerificationFlavor::None),
+      emitSeparateAlwaysBlocks(false), etcDisableInstanceExtraction(false),
+      etcDisableRegisterExtraction(false), etcDisableModuleInlining(false),
       addVivadoRAMAddressConflictSynthesisBugWorkaround(false),
       ckgModuleName("EICG_wrapper"), ckgInputName("in"), ckgOutputName("out"),
       ckgEnableName("en"), ckgTestEnableName("test_en"), ckgInstName("ckg"),
       exportModuleHierarchy(false), stripFirDebugInfo(true),
-      stripDebugInfo(false), fixupEICGWrapper(false) {
+      stripDebugInfo(false), fixupEICGWrapper(false),
+      addCompanionAssume(false) {
   if (!clOptions.isConstructed())
     return;
   outputFilename = clOptions->outputFilename;
@@ -722,7 +731,6 @@ circt::firtool::FirtoolOptions::FirtoolOptions()
   chiselInterfaceOutDirectory = clOptions->chiselInterfaceOutDirectory;
   vbToBV = clOptions->vbToBV;
   noDedup = clOptions->noDedup;
-  runWireDFT = clOptions->runWireDFT;
   companionMode = clOptions->companionMode;
   disableAggressiveMergeConnections =
       clOptions->disableAggressiveMergeConnections;
@@ -739,7 +747,7 @@ circt::firtool::FirtoolOptions::FirtoolOptions()
   outputAnnotationFilename = clOptions->outputAnnotationFilename;
   enableAnnotationWarning = clOptions->enableAnnotationWarning;
   addMuxPragmas = clOptions->addMuxPragmas;
-  emitChiselAssertsAsSVA = clOptions->emitChiselAssertsAsSVA;
+  verificationFlavor = clOptions->verificationFlavor;
   emitSeparateAlwaysBlocks = clOptions->emitSeparateAlwaysBlocks;
   etcDisableInstanceExtraction = clOptions->etcDisableInstanceExtraction;
   etcDisableRegisterExtraction = clOptions->etcDisableRegisterExtraction;
@@ -755,4 +763,5 @@ circt::firtool::FirtoolOptions::FirtoolOptions()
   stripFirDebugInfo = clOptions->stripFirDebugInfo;
   stripDebugInfo = clOptions->stripDebugInfo;
   fixupEICGWrapper = clOptions->fixupEICGWrapper;
+  addCompanionAssume = clOptions->addCompanionAssume;
 }

@@ -193,7 +193,11 @@ def AddSeqMemPorts : Pass<"firrtl-add-seqmem-ports", "firrtl::CircuitOp"> {
     the extra ports.
   }];
   let constructor = "circt::firrtl::createAddSeqMemPortsPass()";
-  let dependentDialects = ["sv::SVDialect", "hw::HWDialect"];
+  let dependentDialects = [
+    "emit::EmitDialect",
+    "sv::SVDialect",
+    "hw::HWDialect"
+  ];
   let statistics = [
     Statistic<"numAddedPorts", "num-added-ports", "Number of extra ports added">,
   ];
@@ -210,7 +214,12 @@ def CreateSiFiveMetadata : Pass<"firrtl-emit-metadata", "mlir::ModuleOp"> {
     Option<"replSeqMemFile", "repl-seq-mem-file", "std::string", "",
       "File to which emit seq meme metadata">
   ];
-  let dependentDialects = ["hw::HWDialect", "om::OMDialect"];
+  let dependentDialects = [
+      "emit::EmitDialect",
+      "hw::HWDialect",
+      "om::OMDialect",
+      "sv::SVDialect",
+  ];
 }
 
 def FlattenMemory : Pass<"firrtl-flatten-memory", "firrtl::FModuleOp"> {
@@ -238,19 +247,6 @@ def LowerMemory : Pass<"firrtl-lower-memory", "firrtl::CircuitOp"> {
     Statistic<"numLoweredMems", "num-lowered-mems",
       "Number of memories lowered">,
   ];
-}
-
-def WireDFT : Pass<"firrtl-dft", "firrtl::CircuitOp"> {
-  let summary = "Wires test enables to clock gates for DFT infrastructure";
-  let description = [{
-    This pass will take a 1-bit signal targeted by
-    `DFTTestModeEnableAnnotation` and wires it to the `test_en` port of every
-    module named `EICG_wrapper`. This will create ports in any intermediate
-    module on the path from the signal to the `EICG_wrapper` modules.  This
-    pass is used to enable the "Design For Testing" style of design when the
-    intermediate modules were not originally built with DFT in mind.
-  }];
-  let constructor = "circt::firrtl::createWireDFTPass()";
 }
 
 def Dedup : Pass<"firrtl-dedup", "firrtl::CircuitOp"> {
@@ -282,7 +278,11 @@ def EmitOMIR : Pass<"firrtl-emit-omir", "firrtl::CircuitOp"> {
   let constructor = "circt::firrtl::createEmitOMIRPass()";
   let options = [Option<"outputFilename", "file", "std::string", "",
       "Output file for the JSON-serialized OMIR data">];
-  let dependentDialects = ["sv::SVDialect", "hw::HWDialect"];
+  let dependentDialects = [
+      "emit::EmitDialect",
+      "sv::SVDialect",
+      "hw::HWDialect"
+  ];
 }
 
 def LowerMatches : Pass<"firrtl-lower-matches", "firrtl::FModuleOp"> {
@@ -580,7 +580,11 @@ def ExtractInstances : Pass<"firrtl-extract-instances", "firrtl::CircuitOp"> {
     - `ExtractClockGatesFileAnnotation`
   }];
   let constructor = "circt::firrtl::createExtractInstancesPass()";
-  let dependentDialects = ["sv::SVDialect", "circt::hw::HWDialect"];
+  let dependentDialects = [
+    "emit::EmitDialect",
+    "circt::hw::HWDialect",
+    "sv::SVDialect",
+  ];
 }
 
 def MemToRegOfVec : Pass<"firrtl-mem-to-reg-of-vec", "firrtl::CircuitOp"> {
@@ -655,26 +659,54 @@ def RandomizeRegisterInit :
   let constructor = "circt::firrtl::createRandomizeRegisterInitPass()";
 }
 
+def CreateCompanionAssume : Pass<"firrtl-create-companion-assume", "firrtl::FModuleOp"> {
+  let summary = "Create companion assume statements for assertions";
+  let description = [{
+    This pass generates companion assume statements gated by macros to assertions.
+    If the assertion is UNR only one, a special form of assume (AssumeEdgedPredicateIntrinsicOp)
+    is used. Otherwise a concurrent assume is used
+  }];
+  let constructor = "circt::firrtl::createCreateCompanionAssume()";
+}
+
 def LowerXMR : Pass<"firrtl-lower-xmr", "firrtl::CircuitOp"> {
   let summary = "Lower ref ports to XMR";
   let description = [{
     This pass lowers RefType ops and ports to verbatim encoded XMRs.
   }];
   let constructor = "circt::firrtl::createLowerXMRPass()";
-  let dependentDialects = ["sv::SVDialect"];
+  let dependentDialects = [
+    "emit::EmitDialect",
+    "sv::SVDialect"
+  ];
 }
 
-def LowerIntrinsics : Pass<"firrtl-lower-intrinsics", "firrtl::CircuitOp"> {
-  let summary = "Lower intrinsics";
+def LowerIntmodules : Pass<"firrtl-lower-intmodules", "firrtl::CircuitOp"> {
+  let summary = "Lower instances instances of intrinsic modules to ops.";
   let description = [{
-    This pass lowers intrinsics encoded as extmodule with annotation and
-    intmodule to their implementation or op.
+    This pass replaces instances of intrinsic modules (intmodule) with 
+    `firrtl.int.generic` operations, and removes the intmodule's from
+    the circuit.
+ 
+    Use this before running LowerIntrinsics.
   }];
-  let constructor = "circt::firrtl::createLowerIntrinsicsPass()";
+  let constructor = "circt::firrtl::createLowerIntmodulesPass()";
   let options = [
     Option<"fixupEICGWrapper", "fixup-eicg-wrapper", "bool", "false",
       "Lower `EICG_wrapper` modules into clock gate intrinsics">,
   ];
+  let statistics = [
+    Statistic<"numInstances", "num-instances", "Number of intmodules instances lowered">,
+    Statistic<"numIntmodules", "num-intmodules", "Number of intmodules lowered">,
+  ];
+}
+
+def LowerIntrinsics : Pass<"firrtl-lower-intrinsics", "firrtl::FModuleOp"> {
+  let summary = "Lower intrinsics";
+  let description = [{
+    This pass lowers generic intrinsic ops to their implementation or op.
+  }];
+  let constructor = "circt::firrtl::createLowerIntrinsicsPass()";
 }
 
 def LowerOpenAggs : Pass<"firrtl-lower-open-aggs", "firrtl::CircuitOp"> {
@@ -701,7 +733,7 @@ def ResolveTraces : Pass<"firrtl-resolve-traces", "firrtl::CircuitOp"> {
   let constructor = "circt::firrtl::createResolveTracesPass()";
   let options = [Option<"outputAnnotationFilename", "file", "std::string", "",
       "Output file for the JSON-serialized Trace Annotations">];
-  let dependentDialects = ["sv::SVDialect"];
+  let dependentDialects = ["emit::EmitDialect", "sv::SVDialect"];
 }
 
 def InnerSymbolDCE : Pass<"firrtl-inner-symbol-dce", "mlir::ModuleOp"> {
