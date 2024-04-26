@@ -945,14 +945,15 @@ def FunctionOp : SVOp<"function", [IsolatedFromAbove, Symbol, OpAsmOpInterface,
     OptionalAttr<DictArrayAttr>:$per_port_attrs
   );
 
-  // let assemblyFormat =
-  //    "$sym_name (`function_name` $verilogName^)? attr-dict `:` $module_type $body";
-
   let results = (outs);
   let regions = (region AnyRegion:$body);
 
   let hasCustomAssemblyFormat = 1;
   let extraClassDeclaration = [{
+    static mlir::StringRef getExplicitReturnAttrName () {
+      return "sv.function.explicit_return";
+    }
+
     mlir::FunctionType getFunctionType() {
       return getModuleType().getFuncType();
     }

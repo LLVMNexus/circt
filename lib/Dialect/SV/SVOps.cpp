@@ -2189,7 +2189,6 @@ void FunctionOp::getAsmBlockArgumentNames(mlir::Region &region,
   auto func = cast<FunctionOp>(region.getParentOp());
 
   auto *block = &region.front();
-  llvm::errs() << func.getModuleType() << " "<< block->getNumArguments() << "\n";
 
   auto names = func.getModuleType().getInputNames();
   for (size_t i = 0, e = block->getNumArguments(); i != e; ++i) {
@@ -2199,14 +2198,14 @@ void FunctionOp::getAsmBlockArgumentNames(mlir::Region &region,
 }
 
 Type FunctionOp::getExplicitReturnType() {
-  auto ports = getModuleType().getPorts();
-  auto portsAttr = getPerPortAttrsAttr().getAsRange<DictionaryAttr>();
-  for (auto [port, portAttr] : llvm::zip(ports, portsAttr)) {
-    if (port.dir != hw::ModulePort::Output)
-      continue;
-    if (portAttr.getAs<UnitAttr>("sv.function.explicit_return"))
-      return port.type;
-  }
+  if (!getPerPortAttrsAttr() || getPerPortAttrsAttr().empty())
+    return {};
+  auto lastPort = getModuleType().getPorts().back();
+  Attribute lastPortAttr = ArrayRef<Attribute>(getPerPortAttrsAttr()).back();
+  if (lastPort.dir == hw::ModulePort::Output &&
+      cast<DictionaryAttr>(lastPortAttr)
+          .getAs<UnitAttr>(getExplicitReturnAttrName()))
+    return lastPort.type;
   return {};
 }
 
@@ -2223,7 +2222,11 @@ void FunctionOp::print(OpAsmPrinter &p) {
     p << visibility.getValue() << ' ';
   p.printSymbolName(funcName);
   hw::module_like_impl::printModuleSignatureNew(
-      p, op.getBody(), op.getModuleType(), op.getPerPortAttrsAttr(), {});
+      p, op.getBody(), op.getModuleType(),
+      op.getPerPortAttrsAttr()
+          ? ArrayRef<Attribute>(op.getPerPortAttrsAttr().getValue())
+          : ArrayRef<Attribute>{},
+      {});
 
   mlir::function_interface_impl::printFunctionAttributes(
       p, op,

@@ -4167,14 +4167,17 @@ LogicalResult StmtEmitter::visitSV(FunctionCallProceduralOp op) {
   return success();
 }
 
+template <typename PPS>
+void emitFunctionSignature(PPS &ps, FunctionOp op) {
+  auto ret = op.getExplicitReturnType();
+  if (ret) {
+  }
+}
+
 LogicalResult StmtEmitter::visitSV(FunctionOp op) {
   // Nothing to emit for a declaration.
   if (op.isDeclaration())
     return success();
-  startStatement();
-
-  ps << "function";
-  auto type = op.getExplicitReturnType();
 
   // Unsupported now.
   return op.emitError() << "emission unsupported";
@@ -4183,13 +4186,24 @@ LogicalResult StmtEmitter::visitSV(FunctionOp op) {
 LogicalResult StmtEmitter::visitSV(FunctionDPIImportOp importOp) {
   startStatement();
 
-  ps << "import \"DPI-C\" function void ";
+  ps << "import" << PP::nbsp << "\"DPI-C\"" << PP::nbsp << "function"
+     << PP::nbsp;
+
   auto op = cast<FunctionOp>(
       state.symbolCache.getDefinition(importOp.getCalleeAttr()));
   assert(op.isDeclaration() && "function must be a declaration");
-  ps << PPExtString(getSymOpName(op));
+  auto retType = op.getExplicitReturnType();
+  if (retType) {
+    ps.invokeWithStringOS(
+        [&](auto &os) { emitter.printPackedType(retType, os, op->getLoc()); });
+  } else {
+    ps << "void";
+  }
+  ps << PP::nbsp << PPExtString(getSymOpName(op));
   ps << "(";
 
+  emitter.emitPortList(op, ModulePortInfo(op.getPortList()));
+/*
   ps.scopedBox(PP::bbox2, [&]() {
     bool needsComma = false;
     auto printArg = [&](StringRef kind, Attribute name, Type ty) {
@@ -4222,6 +4236,7 @@ LogicalResult StmtEmitter::visitSV(FunctionDPIImportOp importOp) {
   });
 
   ps << PP::newline << ");" << PP::newline;
+  */
   setPendingNewline();
   return success();
 }

@@ -392,8 +392,8 @@ hw.module @XMRRefOp() {
 
 // Functions.
 // CHECK: sv.function private @function_declare(in %in_0 : i2, in %in_1 : i2, out out_0 : i1, in %in_2 : !hw.array<2xi2>) 
-sv.function private @function_declare(in %in_0 : i2, in %in_1 : i2, out out_0 : i1, in %in_2: !hw.array<2xi2>)
-// CHECK: sv.function private @function_define(in %in_0 : i2, in %in_1 : i2, out out_0 : i1, in %in_2 : !hw.array<2xi2>) 
-sv.function private @function_define(in %in_0 : i2, in %in_1 : i1, out out_0 : i1, in %in_2: !hw.array<2xi2>) attributes {test = "foo"} {
-  sv.return %in_1: i1
+sv.function private @function_declare(in %in_0 : i2, in %in_1 : i2, out out_0 : i1, in %in_2 : !hw.array<2xi2>)
+// CHECK: sv.function private @function_define(in %in_0 : i2, in %in_1 : i1, out out_0 : i1, in %in_2 : !hw.array<2xi2>) 
+sv.function private @function_define(in %in_0 : i2, in %in_1 : i1, out out_0 : i1, in %in_2 : !hw.array<2xi2>) attributes {test = "foo"} {
+  sv.return %in_1 : i1
 }
