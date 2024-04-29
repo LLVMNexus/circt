@@ -302,9 +302,10 @@ struct ICmpOpLowering : public OpConversionPattern<ICmpOp> {
     Value rhsValue = extendTypeWidth(rewriter, loc, adaptor.getRhs(), cmpWidth,
                                      rhsType.isSigned());
 
-    auto newOp = rewriter.replaceOpWithNewOp<comb::ICmpOp>(
-        op, combPred, lhsValue, rhsValue, false);
+    auto newOp = rewriter.create<comb::ICmpOp>(op->getLoc(), combPred, lhsValue,
+                                               rhsValue, false);
     newOp->setDialectAttrs(op->getDialectAttrs());
+    rewriter.replaceOp(op, newOp);
 
     return success();
   }
@@ -331,8 +332,10 @@ struct BinaryOpLowering : public OpConversionPattern<BinOp> {
     Value rhsValue = extendTypeWidth(rewriter, loc, adaptor.getInputs()[1],
                                      targetWidth, isRhsTypeSigned);
     auto newOp =
-        rewriter.replaceOpWithNewOp<ReplaceOp>(op, lhsValue, rhsValue, false);
+        rewriter.create<ReplaceOp>(op.getLoc(), lhsValue, rhsValue, false);
     newOp->setDialectAttrs(op->getDialectAttrs());
+    rewriter.replaceOp(op, newOp);
+
     return success();
   }
 };
