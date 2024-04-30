@@ -2209,23 +2209,23 @@ Type FunctionOp::getExplicitReturnType() {
   return {};
 }
 
-
-SmallVector<PortInfo> FunctionOp::getPortList() {
-  // auto modTy = mod.getHWModuleType();
-  // auto emptyDict = DictionaryAttr::get(mod.getContext());
-  SmallVector<PortInfo> retval;
-  // auto locs = mod.getAllPortLocs();
-  // for (unsigned i = 0, e = modTy.getNumPorts(); i < e; ++i) {
-  //   LocationAttr loc = locs[i];
-  //   DictionaryAttr attrs =
-  //       dyn_cast_or_null<DictionaryAttr>(mod.getPortAttrs(i));
-  //   if (!attrs)
-  //     attrs = emptyDict;
-  //   retval.push_back({modTy.getPorts()[i],
-  //                     modTy.isOutput(i) ? modTy.getOutputIdForPortId(i)
-  //                                       : modTy.getInputIdForPortId(i),
-  //                     attrs, loc});
-  // }
+SmallVector<hw::PortInfo> FunctionOp::getPortList(bool excludeExplicitReturn) {
+  auto modTy = getModuleType();
+  auto emptyDict = DictionaryAttr::get(getContext());
+  SmallVector<hw::PortInfo> retval;
+  for (unsigned i = 0, e = modTy.getNumPorts(); i < e; ++i) {
+    DictionaryAttr attrs = emptyDict;
+    if (auto perPortAttr = getPerPortAttrs()) {
+      auto portAttr = dyn_cast_or_null<DictionaryAttr>((*perPortAttr)[i]);
+      if (!portAttr)
+        attrs = portAttr;
+    }
+    auto loc = UnknownLoc::get(getContext());
+    retval.push_back({modTy.getPorts()[i],
+                      modTy.isOutput(i) ? modTy.getOutputIdForPortId(i)
+                                        : modTy.getInputIdForPortId(i),
+                      attrs, loc});
+  }
   return retval;
 }
 

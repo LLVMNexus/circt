@@ -4168,76 +4168,39 @@ LogicalResult StmtEmitter::visitSV(FunctionCallProceduralOp op) {
 }
 
 template <typename PPS>
-void emitFunctionSignature(PPS &ps, FunctionOp op) {
-  auto ret = op.getExplicitReturnType();
-  if (ret) {
-  }
+void emitFunctionSignature(ModuleEmitter &emitter, PPS &ps, FunctionOp op) {
+  ps << "function" << PP::nbsp;
+  auto retType = op.getExplicitReturnType();
+  if (retType)
+    ps.invokeWithStringOS(
+        [&](auto &os) { emitter.printPackedType(retType, os, op->getLoc()); });
+  else
+    ps << "void";
+  ps << PP::nbsp << PPExtString(getSymOpName(op));
+
+  emitter.emitPortList(
+      op, ModulePortInfo(op.getPortList(/*excludeExplicitReturn=*/true)));
 }
 
 LogicalResult StmtEmitter::visitSV(FunctionOp op) {
   // Nothing to emit for a declaration.
   if (op.isDeclaration())
     return success();
-
-  // Unsupported now.
-  return op.emitError() << "emission unsupported";
+  return op.emitError() << "emission is unsupported yet";
 }
 
 LogicalResult StmtEmitter::visitSV(FunctionDPIImportOp importOp) {
   startStatement();
 
-  ps << "import" << PP::nbsp << "\"DPI-C\"" << PP::nbsp << "function"
-     << PP::nbsp;
+  ps << "import" << PP::nbsp << "\"DPI-C\"" << PP::nbsp;
 
   auto op = cast<FunctionOp>(
       state.symbolCache.getDefinition(importOp.getCalleeAttr()));
   assert(op.isDeclaration() && "function must be a declaration");
-  auto retType = op.getExplicitReturnType();
-  if (retType) {
-    ps.invokeWithStringOS(
-        [&](auto &os) { emitter.printPackedType(retType, os, op->getLoc()); });
-  } else {
-    ps << "void";
-  }
-  ps << PP::nbsp << PPExtString(getSymOpName(op));
-  ps << "(";
+  emitFunctionSignature(emitter, ps, op);
+  assert(state.pendingNewline);
+  ps << PP::newline;
 
-  emitter.emitPortList(op, ModulePortInfo(op.getPortList()));
-/*
-  ps.scopedBox(PP::bbox2, [&]() {
-    bool needsComma = false;
-    auto printArg = [&](StringRef kind, Attribute name, Type ty) {
-      if (needsComma)
-        ps << ",";
-      ps << PP::newline << kind << " ";
-
-      // Emit the type.
-      {
-        SmallString<8> typeString;
-        llvm::raw_svector_ostream stringStream(typeString);
-        emitter.printPackedType(stripUnpackedTypes(ty), stringStream,
-                                op->getLoc());
-        if (!typeString.empty())
-          ps << typeString;
-      }
-
-      ps << " " << PPExtString(name.cast<StringAttr>().getValue());
-
-      // Print out any array subscripts or other post-name stuff.
-      ps.invokeWithStringOS(
-          [&](auto &os) { emitter.printUnpackedTypePostfix(ty, os); });
-      needsComma = true;
-    };
-
-    auto ports = op.getModuleType().getPorts();
-    for (auto port : ports)
-      printArg(port.dir == PortInfo::Direction::Input ? "input " : "output ",
-               port.name, port.type);
-  });
-
-  ps << PP::newline << ");" << PP::newline;
-  */
-  setPendingNewline();
   return success();
 }
 
@@ -6197,7 +6160,7 @@ void FileEmitter::emit(Block *block) {
   for (Operation &op : *block) {
     TypeSwitch<Operation *>(&op)
         .Case<emit::VerbatimOp, emit::RefOp>([&](auto op) { emitOp(op); })
-        .Case<VerbatimOp, IfDefOp, MacroDefOp>(
+        .Case<VerbatimOp, IfDefOp, MacroDefOp, sv::FunctionDPIImportOp>(
             [&](auto op) { ModuleEmitter(state).emitStatement(op); })
         .Case<BindOp>([&](auto op) { ModuleEmitter(state).emitBind(op); })
         .Case<BindInterfaceOp>(
@@ -6424,7 +6387,7 @@ void SharedEmitterState::gatherFiles(bool separateModules) {
           else
             rootFile.ops.push_back(info);
         })
-        .Case<VerbatimOp, IfDefOp, MacroDefOp>([&](Operation *op) {
+        .Case<VerbatimOp, IfDefOp, MacroDefOp, FunctionDPIImportOp>([&](Operation *op) {
           // Emit into a separate file using the specified file name or
           // replicate the operation in each outputfile.
           if (!attr) {
