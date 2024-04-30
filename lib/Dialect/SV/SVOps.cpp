@@ -2209,6 +2209,26 @@ Type FunctionOp::getExplicitReturnType() {
   return {};
 }
 
+
+SmallVector<PortInfo> FunctionOp::getPortList() {
+  // auto modTy = mod.getHWModuleType();
+  // auto emptyDict = DictionaryAttr::get(mod.getContext());
+  SmallVector<PortInfo> retval;
+  // auto locs = mod.getAllPortLocs();
+  // for (unsigned i = 0, e = modTy.getNumPorts(); i < e; ++i) {
+  //   LocationAttr loc = locs[i];
+  //   DictionaryAttr attrs =
+  //       dyn_cast_or_null<DictionaryAttr>(mod.getPortAttrs(i));
+  //   if (!attrs)
+  //     attrs = emptyDict;
+  //   retval.push_back({modTy.getPorts()[i],
+  //                     modTy.isOutput(i) ? modTy.getOutputIdForPortId(i)
+  //                                       : modTy.getInputIdForPortId(i),
+  //                     attrs, loc});
+  // }
+  return retval;
+}
+
 void FunctionOp::print(OpAsmPrinter &p) {
   FunctionOp op = *this;
   // Print the operation and the function name.

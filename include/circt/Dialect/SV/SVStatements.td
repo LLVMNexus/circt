@@ -978,6 +978,7 @@ def FunctionOp : SVOp<"function", [IsolatedFromAbove, Symbol, OpAsmOpInterface,
     /// OpAsmInterface
     void getAsmBlockArgumentNames(mlir::Region &region,
                                           mlir::OpAsmSetValueNameFn setNameFn);
+    SmallVector<hw::PortInfo> getPortList();
   }];
 }
 
