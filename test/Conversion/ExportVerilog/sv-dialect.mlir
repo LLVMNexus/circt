@@ -1663,8 +1663,8 @@ hw.module @IndexPartSelect(out a : i3) {
 }
 
 // Functions.
-sv.function private @function_declare1(in %in_0 : i2, in %in_1 : i2, out out_0 : i1)
-sv.function private @function_declare2(in %in_0 : i2, in %in_1 : i2, out out_0 : i1 {sv.function.explicit_return})
+sv.func private @function_declare1(in %in_0 : i2, in %in_1 : i2, out out_0 : i1)
+sv.func private @function_declare2(in %in_0 : i2, in %in_1 : i2, out out_0 : i1 {sv.function.explicit_return})
 
 // Emit DPI import.
 sv.function.dpi.import @function_declare1

@@ -191,7 +191,7 @@ StringRef ExportVerilog::getSymOpName(Operation *symOp) {
     return attr.getValue();
   return TypeSwitch<Operation *, StringRef>(symOp)
       .Case<HWModuleOp, HWModuleExternOp, HWModuleGeneratedOp,
-            sv::FunctionDPIDeclareOp, sv::FunctionOp>(
+            sv::FunctionDPIDeclareOp, sv::FuncOp>(
           [](Operation *op) { return getVerilogModuleName(op); })
       .Case<InterfaceOp>([&](InterfaceOp op) {
         return getVerilogModuleNameAttr(op).getValue();
@@ -3840,7 +3840,7 @@ private:
   LogicalResult visitVerif(verif::CoverOp op);
 
   LogicalResult visitSV(FunctionDPIImportOp op);
-  LogicalResult visitSV(FunctionOp op);
+  LogicalResult visitSV(FuncOp op);
   LogicalResult visitSV(FunctionCallProceduralOp op);
 
 public:
@@ -4140,7 +4140,7 @@ LogicalResult StmtEmitter::visitSV(FunctionCallProceduralOp op) {
   startStatement();
 
   auto callee =
-      cast<FunctionOp>(state.symbolCache.getDefinition(op.getCalleeAttr()));
+      cast<FuncOp>(state.symbolCache.getDefinition(op.getCalleeAttr()));
 
   ps << PPExtString(getSymOpName(callee)) << "(";
 
@@ -4168,13 +4168,14 @@ LogicalResult StmtEmitter::visitSV(FunctionCallProceduralOp op) {
 }
 
 template <typename PPS>
-void emitFunctionSignature(ModuleEmitter &emitter, PPS &ps, FunctionOp op) {
+void emitFunctionSignature(ModuleEmitter &emitter, PPS &ps, FuncOp op) {
   ps << "function" << PP::nbsp;
-  auto retType = op.getExplicitReturnType();
-  if (retType)
-    ps.invokeWithStringOS(
-        [&](auto &os) { emitter.printPackedType(retType, os, op->getLoc()); });
-  else
+  auto retType = op.getExplicitlyReturnedType();
+  if (retType) {
+    ps.invokeWithStringOS([&](auto &os) {
+      emitter.printPackedType(retType, os, op->getLoc(), {}, false);
+    });
+  } else
     ps << "void";
   ps << PP::nbsp << PPExtString(getSymOpName(op));
 
@@ -4182,7 +4183,7 @@ void emitFunctionSignature(ModuleEmitter &emitter, PPS &ps, FunctionOp op) {
       op, ModulePortInfo(op.getPortList(/*excludeExplicitReturn=*/true)));
 }
 
-LogicalResult StmtEmitter::visitSV(FunctionOp op) {
+LogicalResult StmtEmitter::visitSV(FuncOp op) {
   // Nothing to emit for a declaration.
   if (op.isDeclaration())
     return success();
@@ -4194,8 +4195,8 @@ LogicalResult StmtEmitter::visitSV(FunctionDPIImportOp importOp) {
 
   ps << "import" << PP::nbsp << "\"DPI-C\"" << PP::nbsp;
 
-  auto op = cast<FunctionOp>(
-      state.symbolCache.getDefinition(importOp.getCalleeAttr()));
+  auto op =
+      cast<FuncOp>(state.symbolCache.getDefinition(importOp.getCalleeAttr()));
   assert(op.isDeclaration() && "function must be a declaration");
   emitFunctionSignature(emitter, ps, op);
   assert(state.pendingNewline);
@@ -6387,14 +6388,15 @@ void SharedEmitterState::gatherFiles(bool separateModules) {
           else
             rootFile.ops.push_back(info);
         })
-        .Case<VerbatimOp, IfDefOp, MacroDefOp, FunctionDPIImportOp>([&](Operation *op) {
-          // Emit into a separate file using the specified file name or
-          // replicate the operation in each outputfile.
-          if (!attr) {
-            replicatedOps.push_back(op);
-          } else
-            separateFile(op, "");
-        })
+        .Case<VerbatimOp, IfDefOp, MacroDefOp, FunctionDPIImportOp>(
+            [&](Operation *op) {
+              // Emit into a separate file using the specified file name or
+              // replicate the operation in each outputfile.
+              if (!attr) {
+                replicatedOps.push_back(op);
+              } else
+                separateFile(op, "");
+            })
         .Case<HWGeneratorSchemaOp>([&](HWGeneratorSchemaOp schemaOp) {
           symbolCache.addDefinition(schemaOp.getNameAttr(), schemaOp);
         })
@@ -6416,7 +6418,7 @@ void SharedEmitterState::gatherFiles(bool separateModules) {
             separateFile(op);
           }
         })
-        .Case<MacroDeclOp, FunctionDPIDeclareOp, sv::FunctionOp>([&](auto op) {
+        .Case<MacroDeclOp, FunctionDPIDeclareOp, sv::FuncOp>([&](auto op) {
           symbolCache.addDefinition(op.getSymNameAttr(), op);
         })
         .Case<om::ClassLike>([&](auto op) {

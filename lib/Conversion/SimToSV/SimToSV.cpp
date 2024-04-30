@@ -255,7 +255,7 @@ struct SimToSVPass : public LowerSimToSVBase<SimToSVPass> {
     for (auto dpiImportOp :
          llvm::make_early_inc_range(circuit.getOps<sim::DPIImportOp>())) {
       ImplicitLocOpBuilder builder(dpiImportOp.getLoc(), dpiImportOp);
-      auto f = builder.create<sv::FunctionOp>(dpiImportOp.getSymNameAttr(),
+      auto f = builder.create<sv::FuncOp>(dpiImportOp.getSymNameAttr(),
                                      dpiImportOp.getModuleType(), ArrayAttr());
       f.setPrivate();
       auto fragmentSym = FlatSymbolRefAttr::get(builder.getStringAttr(

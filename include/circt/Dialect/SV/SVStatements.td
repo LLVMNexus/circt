@@ -935,9 +935,12 @@ def FunctionDPIDeclareOp : SVOp<"function.dpi.decl", [IsolatedFromAbove, Symbol,
   }];
 }
 
-def FunctionOp : SVOp<"function", [IsolatedFromAbove, Symbol, OpAsmOpInterface,
+def FuncOp : SVOp<"func", 
+     [IsolatedFromAbove, Symbol, OpAsmOpInterface,
       FunctionOpInterface, HasParent<"mlir::ModuleOp">]> {
   let summary = "A System Verilog function";
+  let description = [{
+  }];
 
   let arguments = (ins 
     SymbolNameAttr:$sym_name,
@@ -950,8 +953,8 @@ def FunctionOp : SVOp<"function", [IsolatedFromAbove, Symbol, OpAsmOpInterface,
 
   let hasCustomAssemblyFormat = 1;
   let extraClassDeclaration = [{
-    static mlir::StringRef getExplicitReturnAttrName () {
-      return "sv.function.explicit_return";
+    static mlir::StringRef getExplicitlyReturnedAttrName () {
+      return "sv.func.explicitly_returned";
     }
 
     mlir::FunctionType getFunctionType() {
@@ -970,7 +973,7 @@ def FunctionOp : SVOp<"function", [IsolatedFromAbove, Symbol, OpAsmOpInterface,
 
     SmallVector<Location> getAllPortLocs();
 
-    Type getExplicitReturnType();
+    Type getExplicitlyReturnedType();
 
     ::mlir::Region *getCallableRegion() { return nullptr; }
     bool isDeclaration() { return isExternal(); }
@@ -1010,7 +1013,7 @@ def FunctionCallProceduralOp : SVOp<"function.call.procedural", [CallOpInterface
 }
 
 def ReturnOp : SVOp<"return",
-                   [Pure, ReturnLike, Terminator, HasParent<"FunctionOp">]> {
+                   [Pure, ReturnLike, Terminator, HasParent<"FuncOp">]> {
   let summary = "Function return operation";
 
   let arguments = (ins Variadic<AnyType>:$operands);

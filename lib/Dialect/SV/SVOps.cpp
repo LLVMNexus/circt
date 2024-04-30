@@ -2124,7 +2124,7 @@ FunctionDPIImportOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   return success();
 }
 
-ParseResult FunctionOp::parse(OpAsmParser &parser, OperationState &result) {
+ParseResult FuncOp::parse(OpAsmParser &parser, OperationState &result) {
   auto builder = parser.getBuilder();
   // Parse visibility.
   (void)mlir::impl::parseOptionalVisibilityKeyword(parser, result.attributes);
@@ -2141,7 +2141,7 @@ ParseResult FunctionOp::parse(OpAsmParser &parser, OperationState &result) {
           hw::module_like_impl::parseModuleSignature(parser, ports, modType)))
     return failure();
 
-  result.addAttribute(FunctionOp::getModuleTypeAttrName(result.name), modType);
+  result.addAttribute(FuncOp::getModuleTypeAttrName(result.name), modType);
 
   // Convert the specified array of dictionary attrs (which may have null
   // entries) to an ArrayAttr of dictionaries.
@@ -2149,7 +2149,7 @@ ParseResult FunctionOp::parse(OpAsmParser &parser, OperationState &result) {
   for (auto &port : ports)
     attrs.push_back(port.attrs ? port.attrs : builder.getDictionaryAttr({}));
 
-  result.addAttribute(FunctionOp::getPerPortAttrsAttrName(result.name),
+  result.addAttribute(FuncOp::getPerPortAttrsAttrName(result.name),
                       builder.getArrayAttr(attrs));
 
   // Parse the attribute dict.
@@ -2181,12 +2181,12 @@ ParseResult FunctionOp::parse(OpAsmParser &parser, OperationState &result) {
   return success();
 }
 
-void FunctionOp::getAsmBlockArgumentNames(mlir::Region &region,
-                                          mlir::OpAsmSetValueNameFn setNameFn) {
+void FuncOp::getAsmBlockArgumentNames(mlir::Region &region,
+                                      mlir::OpAsmSetValueNameFn setNameFn) {
   if (region.empty())
     return;
   // Assign port names to the bbargs.
-  auto func = cast<FunctionOp>(region.getParentOp());
+  auto func = cast<FuncOp>(region.getParentOp());
 
   auto *block = &region.front();
 
@@ -2197,19 +2197,19 @@ void FunctionOp::getAsmBlockArgumentNames(mlir::Region &region,
   }
 }
 
-Type FunctionOp::getExplicitReturnType() {
+Type FuncOp::getExplicitlyReturnedType() {
   if (!getPerPortAttrsAttr() || getPerPortAttrsAttr().empty())
     return {};
   auto lastPort = getModuleType().getPorts().back();
-  Attribute lastPortAttr = ArrayRef<Attribute>(getPerPortAttrsAttr()).back();
-  if (lastPort.dir == hw::ModulePort::Output &&
-      cast<DictionaryAttr>(lastPortAttr)
-          .getAs<UnitAttr>(getExplicitReturnAttrName()))
+  auto lastPortAttr = dyn_cast<DictionaryAttr>(
+      getPerPortAttrsAttr()[getPerPortAttrsAttr().size() - 1]);
+  if (lastPort.dir == hw::ModulePort::Output && lastPortAttr &&
+      lastPortAttr.getAs<UnitAttr>(getExplicitlyReturnedAttrName()))
     return lastPort.type;
   return {};
 }
 
-SmallVector<hw::PortInfo> FunctionOp::getPortList(bool excludeExplicitReturn) {
+SmallVector<hw::PortInfo> FuncOp::getPortList(bool excludeExplicitReturn) {
   auto modTy = getModuleType();
   auto emptyDict = DictionaryAttr::get(getContext());
   SmallVector<hw::PortInfo> retval;
@@ -2229,8 +2229,8 @@ SmallVector<hw::PortInfo> FunctionOp::getPortList(bool excludeExplicitReturn) {
   return retval;
 }
 
-void FunctionOp::print(OpAsmPrinter &p) {
-  FunctionOp op = *this;
+void FuncOp::print(OpAsmPrinter &p) {
+  FuncOp op = *this;
   // Print the operation and the function name.
   auto funcName =
       op->getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName())
