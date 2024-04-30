@@ -3,7 +3,7 @@
 ; CHECK-LABEL: `ifndef SYNTHESIS
 ; CHECK-NEXT:  import "DPI-C" function void foo(
 ; CHECK-NEXT:    input  [1:0] in_0,
-; CHECK-NEXT:    input  [1:0] in_1,
+; CHECK-NEXT:                 in_1,
 ; CHECK-NEXT:    output  struct packed {logic [31:0] out1; logic out2; } out_0
 ; CHECK-NEXT:  );
 circuit DPI:

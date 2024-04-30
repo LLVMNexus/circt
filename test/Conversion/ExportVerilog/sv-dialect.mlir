@@ -1663,12 +1663,24 @@ hw.module @IndexPartSelect(out a : i3) {
 }
 
 // Functions.
-sv.func private @function_declare1(in %in_0 : i2, in %in_1 : i2, out out_0 : i1)
-sv.func private @function_declare2(in %in_0 : i2, in %in_1 : i2, out out_0 : i1 {sv.function.explicit_return})
+sv.func private @function_declare1(in %in_0 : i2, out out_0: i2, in %in_1 : i2, out out_1 : i1)
+sv.func private @function_declare2(in %in_0 : i2, in %in_1 : i2, out out_0 : i1 {sv.func.explicitly_returned})
 
 // Emit DPI import.
-sv.function.dpi.import @function_declare1
-sv.function.dpi.import @function_declare2
+
+// CHECK-LABEL: import "DPI-C" function void function_declare1(
+// CHECK-NEXT:    input [1:0] in_0,
+// CHECK-NEXT:                out_0,
+// CHECK-NEXT:                in_1,
+// CHECK-NEXT:    output out_1
+// CHECK-NEXT: );
+sv.func.dpi.import @function_declare1
+
+// CHECK-LABEL: import "DPI-C" function logic function_declare2(
+// CHECK-NEXT:    input [1:0] in_0,
+// CHECK-NEXT:                in_1
+// CHECK-NEXT: );
+sv.func.dpi.import @function_declare2
 
 sv.macro.decl @FOO
 sv.macro.decl @BAR

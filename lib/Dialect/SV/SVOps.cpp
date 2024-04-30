@@ -2213,7 +2213,10 @@ SmallVector<hw::PortInfo> FuncOp::getPortList(bool excludeExplicitReturn) {
   auto modTy = getModuleType();
   auto emptyDict = DictionaryAttr::get(getContext());
   SmallVector<hw::PortInfo> retval;
+  auto hasExplicitReturn = getExplicitlyReturnedType();
   for (unsigned i = 0, e = modTy.getNumPorts(); i < e; ++i) {
+    if (hasExplicitReturn && i + 1 == e)
+      break;
     DictionaryAttr attrs = emptyDict;
     if (auto perPortAttr = getPerPortAttrs()) {
       auto portAttr = dyn_cast_or_null<DictionaryAttr>((*perPortAttr)[i]);

@@ -888,7 +888,7 @@ def MacroDefOp : SVOp<"macro.def",
 // Function/Call
 //===----------------------------------------------------------------------===//
 
-def FunctionDPIImportOp: SVOp<"function.dpi.import", 
+def FunctionDPIImportOp: SVOp<"func.dpi.import", 
   [DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
   let summary = "Simulation failure condition";
 
@@ -899,7 +899,7 @@ def FunctionDPIImportOp: SVOp<"function.dpi.import",
 }
 
 // TODO: Add a interface for function declarations.
-def FunctionDPIDeclareOp : SVOp<"function.dpi.decl", [IsolatedFromAbove, Symbol,
+def FunctionDPIDeclareOp : SVOp<"func.dpi.decl", [IsolatedFromAbove, Symbol,
       FunctionOpInterface, HasParent<"mlir::ModuleOp">]> {
   let summary = "Import a DPI function";
 
@@ -985,7 +985,7 @@ def FuncOp : SVOp<"func",
   }];
 }
 
-def FunctionCallProceduralOp : SVOp<"function.call.procedural", [CallOpInterface, 
+def FunctionCallProceduralOp : SVOp<"func.call.procedural", [CallOpInterface, 
   DeclareOpInterfaceMethods<SymbolUserOpInterface>, ProceduralOp]> {
   let summary = "Simulation failure condition";
 
