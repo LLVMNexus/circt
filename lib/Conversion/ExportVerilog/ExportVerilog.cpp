@@ -190,8 +190,7 @@ StringRef ExportVerilog::getSymOpName(Operation *symOp) {
   if (auto attr = symOp->getAttrOfType<StringAttr>("hw.verilogName"))
     return attr.getValue();
   return TypeSwitch<Operation *, StringRef>(symOp)
-      .Case<HWModuleOp, HWModuleExternOp, HWModuleGeneratedOp,
-             sv::FuncOp>(
+      .Case<HWModuleOp, HWModuleExternOp, HWModuleGeneratedOp, sv::FuncOp>(
           [](Operation *op) { return getVerilogModuleName(op); })
       .Case<InterfaceOp>([&](InterfaceOp op) {
         return getVerilogModuleNameAttr(op).getValue();
@@ -3658,7 +3657,7 @@ void NameCollector::collectNames(Block &block) {
     // at the result values since wires used by instances should be traversed
     // anyway.
     if (isa<InstanceOp, InstanceChoiceOp, InterfaceInstanceOp,
-            FunctionCallProceduralOp>(op))
+            FuncCallProceduralOp, FuncCallOP>(op))
       continue;
     if (isa<ltl::LTLDialect, debug::DebugDialect>(op.getDialect()))
       continue;
@@ -3841,7 +3840,8 @@ private:
 
   LogicalResult visitSV(FunctionDPIImportOp op);
   LogicalResult visitSV(FuncOp op);
-  LogicalResult visitSV(FunctionCallProceduralOp op);
+  LogicalResult visitSV(FuncCallProceduralOp op);
+  LogicalResult visitSV(FuncCallOp op);
 
 public:
   ModuleEmitter &emitter;
@@ -3939,7 +3939,7 @@ LogicalResult StmtEmitter::visitSV(AssignOp op) {
 }
 
 LogicalResult StmtEmitter::visitSV(BPAssignOp op) {
-  if (op.getSrc().getDefiningOp<FunctionCallProceduralOp>())
+  if (op.getSrc().getDefiningOp<FuncCallProceduralOp>())
     return success();
 
   // If the assign is emitted into logic declaration, we must not emit again.
@@ -4136,7 +4136,50 @@ LogicalResult StmtEmitter::visitStmt(TypedeclOp op) {
   return success();
 }
 
-LogicalResult StmtEmitter::visitSV(FunctionCallProceduralOp op) {
+LogicalResult StmtEmitter::visitSV(FuncCallProceduralOp op) {
+  startStatement();
+
+  auto callee =
+      cast<FuncOp>(state.symbolCache.getDefinition(op.getCalleeAttr()));
+
+  auto explicitReturn = op.getExplicitlyReturnedValue(callee);
+  if (explicitReturn) {
+    assert(explicitReturn.hasOneUse());
+    auto bpassignOp = cast<sv::BPAssignOp>(*explicitReturn.user_begin());
+    ps << PP::space << "=" << PP::space;
+    ps.scopedBox(PP::ibox0, [&]() {
+      emitExpression(initValue, opsForLocation, LowestPrecedence,
+                     /*isAssignmentLikeContext=*/true);
+    });
+  }
+  auto arguments = callee.getPortList(true);
+
+  ps << PPExtString(getSymOpName(callee)) << "(";
+
+  SmallPtrSet<Operation *, 8> ops;
+  ops.insert(op);
+
+  bool needsComma = false;
+  auto printArg = [&](Value value) {
+    if (needsComma)
+      ps << "," << PP::space;
+    emitExpression(value, ops);
+    needsComma = true;
+  };
+
+  ps.scopedBox(PP::ibox0, [&] {
+    for (Value arg : op.getInputs())
+      printArg(arg);
+    for (Value result : op.getResults())
+      printArg(result.getUsers().begin()->getOperand(0));
+  });
+
+  ps << ");";
+  emitLocationInfoAndNewLine(ops);
+  return success();
+}
+
+LogicalResult StmtEmitter::visitSV(FuncCallOp op) {
   startStatement();
 
   auto callee =
@@ -4188,7 +4231,7 @@ LogicalResult StmtEmitter::visitSV(FuncOp op) {
   if (op.isDeclaration())
     return success();
 
-  // TODO: Currently sv function emission is unimplemented. 
+  // TODO: Currently sv function emission is unimplemented.
   return op.emitError() << "emission is unsupported yet";
 }
 

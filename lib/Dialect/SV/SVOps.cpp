@@ -2113,7 +2113,7 @@ ModportStructAttr ModportStructAttr::get(MLIRContext *context,
 //===----------------------------------------------------------------------===//
 
 LogicalResult
-FunctionCallProceduralOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+FuncCallProceduralOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   // TODO: Fill
   return success();
 }
@@ -2218,6 +2218,18 @@ Type FuncOp::getExplicitlyReturnedType() {
       lastArgumentAttr.getAs<UnitAttr>(getExplicitlyReturnedAttrName()))
     return lastArgument.type;
   return {};
+}
+
+Value FuncCallOp::getExplicitlyReturnedValue(sv::FuncOp op) {
+  if (!op.getExplicitlyReturnedType())
+    return {};
+  return getResults().back();
+}
+
+Value FuncCallProceduralOp::getExplicitlyReturnedValue(sv::FuncOp op) {
+  if (!op.getExplicitlyReturnedType())
+    return {};
+  return getResults().back();
 }
 
 SmallVector<hw::PortInfo> FuncOp::getPortList(bool excludeExplicitReturn) {

@@ -890,7 +890,7 @@ def MacroDefOp : SVOp<"macro.def",
 
 def FunctionDPIImportOp: SVOp<"func.dpi.import", 
   [DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
-  let summary = "Simulation failure condition";
+  let summary = "Emit a dpi import statement";
 
   let arguments = (ins FlatSymbolRefAttr:$callee);
   let results = (outs);
@@ -955,16 +955,18 @@ def FuncOp : SVOp<"func",
   }];
 }
 
-def FunctionCallProceduralOp : SVOp<"func.call.procedural", [CallOpInterface, 
-  DeclareOpInterfaceMethods<SymbolUserOpInterface>, ProceduralOp]> {
-  let summary = "Simulation failure condition";
+class SVFuncCallBase<string mnemonic, list<Trait> traits = []>: SVOp<mnemonic, 
+  traits # [CallOpInterface, DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
 
   let arguments = (ins FlatSymbolRefAttr:$callee, Variadic<AnyType>:$inputs);
   let results = (outs Variadic<AnyType>);
 
   let assemblyFormat = 
       "$callee `(` $inputs `)` attr-dict `:` functional-type($inputs, results)";
+  
   let extraClassDeclaration = [{
+    Value getExplicitlyReturnedValue(sv::FuncOp op);
+    
     operand_range getArgOperands() {
       return getInputs();
     }
@@ -980,6 +982,14 @@ def FunctionCallProceduralOp : SVOp<"func.call.procedural", [CallOpInterface,
       (*this)->setAttr(getCalleeAttrName(), callee.get<mlir::SymbolRefAttr>());
     }
   }];
+}
+
+def FuncCallProceduralOp : SVFuncCallBase<"func.call.procedural", [ProceduralOp]> {
+  let summary = "Function call in a procedral region";
+}
+
+def FuncCallOp : SVFuncCallBase<"func.call", [NonProceduralOp]> {
+  let summary = "Function call in a non-procedral region";
 }
 
 def ReturnOp : SVOp<"return",

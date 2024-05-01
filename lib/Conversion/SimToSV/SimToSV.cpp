@@ -181,7 +181,7 @@ public:
         // TODO: Nede to provide other than posedge?
         loc, ArrayRef<sv::EventControl>{sv::EventControl::AtPosEdge},
         ArrayRef<Value>{clockCast}, [&]() {
-          auto call = rewriter.create<sv::FunctionCallProceduralOp>(
+          auto call = rewriter.create<sv::FuncCallProceduralOp>(
               op.getLoc(), op.getResultTypes(), op.getCalleeAttr(),
               adaptor.getInputs());
           for (auto [lhs, rhs] : llvm::zip(temporaries, call.getResults()))
