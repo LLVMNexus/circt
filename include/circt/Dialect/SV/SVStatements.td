@@ -898,43 +898,6 @@ def FunctionDPIImportOp: SVOp<"func.dpi.import",
   let assemblyFormat = "$callee attr-dict";
 }
 
-// TODO: Add a interface for function declarations.
-def FunctionDPIDeclareOp : SVOp<"func.dpi.decl", [IsolatedFromAbove, Symbol,
-      FunctionOpInterface, HasParent<"mlir::ModuleOp">]> {
-  let summary = "Import a DPI function";
-
-  let arguments = (ins 
-      SymbolNameAttr:$sym_name,
-      TypeAttrOf<ModuleType>:$module_type,
-      OptionalAttr<StrAttr>:$verilogName);
-
-  let assemblyFormat =
-     "$sym_name (`function_name` $verilogName^)? attr-dict `:` $module_type $body";
-  let results = (outs);
-  let regions = (region AnyRegion:$body);
-
-  let hasCustomAssemblyFormat = 1;
-  let extraClassDeclaration = [{
-    mlir::FunctionType getFunctionType() {
-      return getModuleType().getFuncType();
-    }
-
-    void setFunctionTypeAttr(mlir::TypeAttr mlirType) {
-      // FIXME: This is really unsafe ...... probably we should implement our own 
-      //        FunctionOpInterface for named/ordered types.
-      assert(false);
-    }
-
-    /// Returns the argument types of this function.
-    ArrayRef<Type> getArgumentTypes() { return getFunctionType().getInputs(); }
-
-    /// Returns the result types of this function.
-    ArrayRef<Type> getResultTypes() { return getFunctionType().getResults(); }
-
-    ::mlir::Region *getCallableRegion() { return nullptr; }
-  }];
-}
-
 def FuncOp : SVOp<"func", 
      [IsolatedFromAbove, Symbol, OpAsmOpInterface,
       FunctionOpInterface, HasParent<"mlir::ModuleOp">]> {
@@ -945,7 +908,8 @@ def FuncOp : SVOp<"func",
   let arguments = (ins 
     SymbolNameAttr:$sym_name,
     TypeAttrOf<ModuleType>:$module_type,
-    OptionalAttr<DictArrayAttr>:$per_port_attrs
+    OptionalAttr<DictArrayAttr>:$per_argument_attrs,
+    OptionalAttr<StrAttr>:$veriloName
   );
 
   let results = (outs);
@@ -953,7 +917,7 @@ def FuncOp : SVOp<"func",
 
   let hasCustomAssemblyFormat = 1;
   let extraClassDeclaration = [{
-    static mlir::StringRef getExplicitlyReturnedAttrName () {
+    static mlir::StringRef getExplicitlyReturnedAttrName() {
       return "sv.func.explicitly_returned";
     }
 
@@ -971,9 +935,15 @@ def FuncOp : SVOp<"func",
     /// Returns the result types of this function.
     ArrayRef<Type> getResultTypes() { return getFunctionType().getResults(); }
 
-    SmallVector<Location> getAllPortLocs();
-
     Type getExplicitlyReturnedType();
+    
+    size_t getNumOutputs() {
+      return getResultTypes().size();
+    }
+
+    size_t getNumInputs() {
+      return getArgumentTypes().size();
+    }
 
     ::mlir::Region *getCallableRegion() { return nullptr; }
     bool isDeclaration() { return isExternal(); }

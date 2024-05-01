@@ -2120,7 +2120,15 @@ FunctionCallProceduralOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
 
 LogicalResult
 FunctionDPIImportOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
-  // TODO: Fill
+  auto referencedOp = dyn_cast_or_null<sv::FuncOp>(
+      symbolTable.lookupNearestSymbolFrom(*this, getCalleeAttr()));
+
+  if (!referencedOp)
+    return emitError("Cannot find function declaration '")
+           << getCallee() << "'";
+  if (!referencedOp.isDeclaration())
+    return emitError("Imported function must be a declaration but '")
+           << getCallee() << "' is defined";
   return success();
 }
 
@@ -2149,7 +2157,7 @@ ParseResult FuncOp::parse(OpAsmParser &parser, OperationState &result) {
   for (auto &port : ports)
     attrs.push_back(port.attrs ? port.attrs : builder.getDictionaryAttr({}));
 
-  result.addAttribute(FuncOp::getPerPortAttrsAttrName(result.name),
+  result.addAttribute(FuncOp::getPerArgumentAttrsAttrName(result.name),
                       builder.getArrayAttr(attrs));
 
   // Parse the attribute dict.
@@ -2198,30 +2206,34 @@ void FuncOp::getAsmBlockArgumentNames(mlir::Region &region,
 }
 
 Type FuncOp::getExplicitlyReturnedType() {
-  if (!getPerPortAttrsAttr() || getPerPortAttrsAttr().empty())
+  if (!getPerArgumentAttrs() || getNumOutputs() == 0)
     return {};
-  auto lastPort = getModuleType().getPorts().back();
-  auto lastPortAttr = dyn_cast<DictionaryAttr>(
-      getPerPortAttrsAttr()[getPerPortAttrsAttr().size() - 1]);
-  if (lastPort.dir == hw::ModulePort::Output && lastPortAttr &&
-      lastPortAttr.getAs<UnitAttr>(getExplicitlyReturnedAttrName()))
-    return lastPort.type;
+
+  // Check if the last port is used as an explicit return.
+  auto lastArgument = getModuleType().getPorts().back();
+  auto lastArgumentAttr = dyn_cast<DictionaryAttr>(
+      getPerArgumentAttrsAttr()[getPerArgumentAttrsAttr().size() - 1]);
+
+  if (lastArgument.dir == hw::ModulePort::Output && lastArgumentAttr &&
+      lastArgumentAttr.getAs<UnitAttr>(getExplicitlyReturnedAttrName()))
+    return lastArgument.type;
   return {};
 }
 
 SmallVector<hw::PortInfo> FuncOp::getPortList(bool excludeExplicitReturn) {
   auto modTy = getModuleType();
   auto emptyDict = DictionaryAttr::get(getContext());
-  SmallVector<hw::PortInfo> retval;
   auto hasExplicitReturn = getExplicitlyReturnedType();
+  SmallVector<hw::PortInfo> retval;
   for (unsigned i = 0, e = modTy.getNumPorts(); i < e; ++i) {
     if (hasExplicitReturn && i + 1 == e)
       break;
     DictionaryAttr attrs = emptyDict;
-    if (auto perPortAttr = getPerPortAttrs()) {
-      auto portAttr = dyn_cast_or_null<DictionaryAttr>((*perPortAttr)[i]);
-      if (!portAttr)
-        attrs = portAttr;
+    if (auto perArgumentAttr = getPerArgumentAttrs()) {
+      auto argumentAttr =
+          dyn_cast_or_null<DictionaryAttr>((*perArgumentAttr)[i]);
+      if (!argumentAttr)
+        attrs = argumentAttr;
     }
     auto loc = UnknownLoc::get(getContext());
     retval.push_back({modTy.getPorts()[i],
@@ -2246,14 +2258,15 @@ void FuncOp::print(OpAsmPrinter &p) {
   p.printSymbolName(funcName);
   hw::module_like_impl::printModuleSignatureNew(
       p, op.getBody(), op.getModuleType(),
-      op.getPerPortAttrsAttr()
-          ? ArrayRef<Attribute>(op.getPerPortAttrsAttr().getValue())
+      op.getPerArgumentAttrsAttr()
+          ? ArrayRef<Attribute>(op.getPerArgumentAttrsAttr().getValue())
           : ArrayRef<Attribute>{},
       {});
 
   mlir::function_interface_impl::printFunctionAttributes(
       p, op,
-      {visibilityAttrName, getModuleTypeAttrName(), getPerPortAttrsAttrName()});
+      {visibilityAttrName, getModuleTypeAttrName(),
+       getPerArgumentAttrsAttrName()});
   // Print the body if this is not an external function.
   Region &body = op->getRegion(0);
   if (!body.empty()) {

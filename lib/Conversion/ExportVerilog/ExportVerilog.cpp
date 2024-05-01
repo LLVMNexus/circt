@@ -191,7 +191,7 @@ StringRef ExportVerilog::getSymOpName(Operation *symOp) {
     return attr.getValue();
   return TypeSwitch<Operation *, StringRef>(symOp)
       .Case<HWModuleOp, HWModuleExternOp, HWModuleGeneratedOp,
-            sv::FunctionDPIDeclareOp, sv::FuncOp>(
+             sv::FuncOp>(
           [](Operation *op) { return getVerilogModuleName(op); })
       .Case<InterfaceOp>([&](InterfaceOp op) {
         return getVerilogModuleNameAttr(op).getValue();
@@ -4187,6 +4187,8 @@ LogicalResult StmtEmitter::visitSV(FuncOp op) {
   // Nothing to emit for a declaration.
   if (op.isDeclaration())
     return success();
+
+  // TODO: Currently sv function emission is unimplemented. 
   return op.emitError() << "emission is unsupported yet";
 }
 
@@ -6418,7 +6420,7 @@ void SharedEmitterState::gatherFiles(bool separateModules) {
             separateFile(op);
           }
         })
-        .Case<MacroDeclOp, FunctionDPIDeclareOp, sv::FuncOp>([&](auto op) {
+        .Case<MacroDeclOp, sv::FuncOp>([&](auto op) {
           symbolCache.addDefinition(op.getSymNameAttr(), op);
         })
         .Case<om::ClassLike>([&](auto op) {
