@@ -270,7 +270,7 @@ struct SimToSVPass : public LowerSimToSVBase<SimToSVPass> {
         builder.create<sv::IfDefOp>(
             "SYNTHESIS", []() {},
             [&]() {
-              builder.create<sv::FunctionDPIImportOp>(dpiImportOp.getSymName());
+              builder.create<sv::FuncDPIImportOp>(dpiImportOp.getSymName());
             });
       });
 

@@ -1734,7 +1734,7 @@ LogicalResult OutputOp::verify() {
   auto modResults = modType.getOutputTypes();
   OperandRange outputValues = getOperands();
   if (modResults.size() != outputValues.size()) {
-    emitOpError("must have same number of operands as region results.");
+    emitOpError("must have same number of operands as region results");
     return failure();
   }
 
@@ -1744,7 +1744,7 @@ LogicalResult OutputOp::verify() {
       emitOpError("output types must match module. In "
                   "operand ")
           << i << ", expected " << modResults[i] << ", but got "
-          << outputValues[i].getType() << ".";
+          << outputValues[i].getType();
       return failure();
     }
   }

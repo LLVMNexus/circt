@@ -2109,7 +2109,7 @@ ModportStructAttr ModportStructAttr::get(MLIRContext *context,
 }
 
 //===----------------------------------------------------------------------===//
-// Func Op.
+// FuncOp
 //===----------------------------------------------------------------------===//
 
 ParseResult FuncOp::parse(OpAsmParser &parser, OperationState &result) {
@@ -2203,10 +2203,10 @@ Type FuncOp::getExplicitlyReturnedType() {
 SmallVector<hw::PortInfo> FuncOp::getPortList(bool excludeExplicitReturn) {
   auto modTy = getModuleType();
   auto emptyDict = DictionaryAttr::get(getContext());
-  auto hasExplicitReturn = getExplicitlyReturnedType();
+  auto skipLastArgument = getExplicitlyReturnedType() && excludeExplicitReturn;
   SmallVector<hw::PortInfo> retval;
   for (unsigned i = 0, e = modTy.getNumPorts(); i < e; ++i) {
-    if (hasExplicitReturn && i + 1 == e)
+    if (i + 1 == e && skipLastArgument)
       break;
     DictionaryAttr attrs = emptyDict;
     if (auto perArgumentAttr = getPerArgumentAttrs()) {
@@ -2257,6 +2257,29 @@ void FuncOp::print(OpAsmPrinter &p) {
 }
 
 //===----------------------------------------------------------------------===//
+// ReturnOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult ReturnOp::verify() {
+  auto func = getParentOp<sv::FuncOp>();
+  auto funcResults = func.getResultTypes();
+  auto returnedValues = getOperands();
+  if (funcResults.size() != returnedValues.size())
+    return emitOpError("must have same number of operands as region results.");
+  // Check that the types of our operands and the region's results match.
+  for (size_t i = 0, e = funcResults.size(); i < e; ++i) {
+    if (funcResults[i] != returnedValues[i].getType()) {
+      emitOpError("output types must match function. In "
+                  "operand ")
+          << i << ", expected " << funcResults[i] << ", but got "
+          << returnedValues[i].getType() << ".";
+      return failure();
+    }
+  }
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // Call Ops
 //===----------------------------------------------------------------------===//
 
@@ -2280,8 +2303,8 @@ LogicalResult
 FuncCallProceduralOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   auto referencedOp = dyn_cast_or_null<sv::FuncOp>(
       symbolTable.lookupNearestSymbolFrom(*this, getCalleeAttr()));
-  if (referencedOp)
-    return emitError("Cannot find function declaration '")
+  if (!referencedOp)
+    return emitError("cannot find function declaration '")
            << getCallee() << "'";
   return success();
 }
@@ -2289,15 +2312,15 @@ FuncCallProceduralOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
 LogicalResult FuncCallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   auto referencedOp = dyn_cast_or_null<sv::FuncOp>(
       symbolTable.lookupNearestSymbolFrom(*this, getCalleeAttr()));
-  if (referencedOp)
-    return emitError("Cannot find function declaration '")
+  if (!referencedOp)
+    return emitError("cannot find function declaration '")
            << getCallee() << "'";
 
   // Non-procedural call cannot have output arguments.
   if (referencedOp.getNumOutputs() != 1 ||
       !referencedOp.getExplicitlyReturnedType()) {
     auto diag = emitError()
-                << "functions called in non-procedural regions must "
+                << "function called in a non-procedural region must "
                    "return a single result";
     diag.attachNote(referencedOp.getLoc()) << "doesn't satisfy the constraint";
     return failure();
@@ -2306,19 +2329,19 @@ LogicalResult FuncCallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
 }
 
 //===----------------------------------------------------------------------===//
-// DPI Import
+// FuncDPIImportOp
 //===----------------------------------------------------------------------===//
 
 LogicalResult
-FunctionDPIImportOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+FuncDPIImportOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   auto referencedOp = dyn_cast_or_null<sv::FuncOp>(
       symbolTable.lookupNearestSymbolFrom(*this, getCalleeAttr()));
 
   if (!referencedOp)
-    return emitError("Cannot find function declaration '")
+    return emitError("cannot find function declaration '")
            << getCallee() << "'";
   if (!referencedOp.isDeclaration())
-    return emitError("Imported function must be a declaration but '")
+    return emitError("imported function must be a declaration but '")
            << getCallee() << "' is defined";
   return success();
 }

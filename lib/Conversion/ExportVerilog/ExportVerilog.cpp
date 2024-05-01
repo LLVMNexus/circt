@@ -3838,7 +3838,7 @@ private:
   LogicalResult visitVerif(verif::AssumeOp op);
   LogicalResult visitVerif(verif::CoverOp op);
 
-  LogicalResult visitSV(FunctionDPIImportOp op);
+  LogicalResult visitSV(FuncDPIImportOp op);
   LogicalResult visitSV(FuncOp op);
   LogicalResult visitSV(FuncCallProceduralOp op);
   LogicalResult visitSV(FuncCallOp op);
@@ -4235,7 +4235,7 @@ LogicalResult StmtEmitter::visitSV(FuncOp op) {
   return op.emitError() << "emission is unsupported yet";
 }
 
-LogicalResult StmtEmitter::visitSV(FunctionDPIImportOp importOp) {
+LogicalResult StmtEmitter::visitSV(FuncDPIImportOp importOp) {
   startStatement();
 
   ps << "import" << PP::nbsp << "\"DPI-C\"" << PP::nbsp;
@@ -6206,7 +6206,7 @@ void FileEmitter::emit(Block *block) {
   for (Operation &op : *block) {
     TypeSwitch<Operation *>(&op)
         .Case<emit::VerbatimOp, emit::RefOp>([&](auto op) { emitOp(op); })
-        .Case<VerbatimOp, IfDefOp, MacroDefOp, sv::FunctionDPIImportOp>(
+        .Case<VerbatimOp, IfDefOp, MacroDefOp, sv::FuncDPIImportOp>(
             [&](auto op) { ModuleEmitter(state).emitStatement(op); })
         .Case<BindOp>([&](auto op) { ModuleEmitter(state).emitBind(op); })
         .Case<BindInterfaceOp>(
@@ -6433,7 +6433,7 @@ void SharedEmitterState::gatherFiles(bool separateModules) {
           else
             rootFile.ops.push_back(info);
         })
-        .Case<VerbatimOp, IfDefOp, MacroDefOp, FunctionDPIImportOp>(
+        .Case<VerbatimOp, IfDefOp, MacroDefOp, FuncDPIImportOp>(
             [&](Operation *op) {
               // Emit into a separate file using the specified file name or
               // replicate the operation in each outputfile.
@@ -6560,7 +6560,7 @@ static void emitOperation(VerilogEmitterState &state, Operation *op) {
       })
       .Case<emit::FileOp, emit::FileListOp, emit::FragmentOp>(
           [&](auto op) { FileEmitter(state).emit(op); })
-      .Case<MacroDefOp, FunctionDPIImportOp>(
+      .Case<MacroDefOp, FuncDPIImportOp>(
           [&](auto op) { ModuleEmitter(state).emitStatement(op); })
       .Default([&](auto *op) {
         state.encounteredError = true;

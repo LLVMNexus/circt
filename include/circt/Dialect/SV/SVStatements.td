@@ -888,7 +888,7 @@ def MacroDefOp : SVOp<"macro.def",
 // Function/Call
 //===----------------------------------------------------------------------===//
 
-def FunctionDPIImportOp: SVOp<"func.dpi.import", 
+def FuncDPIImportOp: SVOp<"func.dpi.import", 
   [DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
   let summary = "Emit a dpi import statement";
 
@@ -1000,5 +1000,5 @@ def ReturnOp : SVOp<"return",
 
   let hasCustomAssemblyFormat = 1;
   let assemblyFormat = "attr-dict ($operands^ `:` type($operands))?";
-  // TODO: Implement a verifier
+  let hasVerifier = 1;
 }
