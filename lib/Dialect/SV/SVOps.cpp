@@ -2109,28 +2109,8 @@ ModportStructAttr ModportStructAttr::get(MLIRContext *context,
 }
 
 //===----------------------------------------------------------------------===//
-// Function/Call Ops.
+// Func Op.
 //===----------------------------------------------------------------------===//
-
-LogicalResult
-FuncCallProceduralOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
-  // TODO: Fill
-  return success();
-}
-
-LogicalResult
-FunctionDPIImportOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
-  auto referencedOp = dyn_cast_or_null<sv::FuncOp>(
-      symbolTable.lookupNearestSymbolFrom(*this, getCalleeAttr()));
-
-  if (!referencedOp)
-    return emitError("Cannot find function declaration '")
-           << getCallee() << "'";
-  if (!referencedOp.isDeclaration())
-    return emitError("Imported function must be a declaration but '")
-           << getCallee() << "' is defined";
-  return success();
-}
 
 ParseResult FuncOp::parse(OpAsmParser &parser, OperationState &result) {
   auto builder = parser.getBuilder();
@@ -2220,18 +2200,6 @@ Type FuncOp::getExplicitlyReturnedType() {
   return {};
 }
 
-Value FuncCallOp::getExplicitlyReturnedValue(sv::FuncOp op) {
-  if (!op.getExplicitlyReturnedType())
-    return {};
-  return getResults().back();
-}
-
-Value FuncCallProceduralOp::getExplicitlyReturnedValue(sv::FuncOp op) {
-  if (!op.getExplicitlyReturnedType())
-    return {};
-  return getResults().back();
-}
-
 SmallVector<hw::PortInfo> FuncOp::getPortList(bool excludeExplicitReturn) {
   auto modTy = getModuleType();
   auto emptyDict = DictionaryAttr::get(getContext());
@@ -2286,6 +2254,73 @@ void FuncOp::print(OpAsmPrinter &p) {
     p.printRegion(body, /*printEntryBlockArgs=*/false,
                   /*printBlockTerminators=*/true);
   }
+}
+
+//===----------------------------------------------------------------------===//
+// Call Ops
+//===----------------------------------------------------------------------===//
+
+static Value
+getExplicitlyReturnedValueImpl(sv::FuncOp op,
+                               mlir::Operation::result_range results) {
+  if (!op.getExplicitlyReturnedType())
+    return {};
+  return results.back();
+}
+
+Value FuncCallOp::getExplicitlyReturnedValue(sv::FuncOp op) {
+  return getExplicitlyReturnedValueImpl(op, getResults());
+}
+
+Value FuncCallProceduralOp::getExplicitlyReturnedValue(sv::FuncOp op) {
+  return getExplicitlyReturnedValueImpl(op, getResults());
+}
+
+LogicalResult
+FuncCallProceduralOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+  auto referencedOp = dyn_cast_or_null<sv::FuncOp>(
+      symbolTable.lookupNearestSymbolFrom(*this, getCalleeAttr()));
+  if (referencedOp)
+    return emitError("Cannot find function declaration '")
+           << getCallee() << "'";
+  return success();
+}
+
+LogicalResult FuncCallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+  auto referencedOp = dyn_cast_or_null<sv::FuncOp>(
+      symbolTable.lookupNearestSymbolFrom(*this, getCalleeAttr()));
+  if (referencedOp)
+    return emitError("Cannot find function declaration '")
+           << getCallee() << "'";
+
+  // Non-procedural call cannot have output arguments.
+  if (referencedOp.getNumOutputs() != 1 ||
+      !referencedOp.getExplicitlyReturnedType()) {
+    auto diag = emitError()
+                << "functions called in non-procedural regions must "
+                   "return a single result";
+    diag.attachNote(referencedOp.getLoc()) << "doesn't satisfy the constraint";
+    return failure();
+  }
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// DPI Import
+//===----------------------------------------------------------------------===//
+
+LogicalResult
+FunctionDPIImportOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+  auto referencedOp = dyn_cast_or_null<sv::FuncOp>(
+      symbolTable.lookupNearestSymbolFrom(*this, getCalleeAttr()));
+
+  if (!referencedOp)
+    return emitError("Cannot find function declaration '")
+           << getCallee() << "'";
+  if (!referencedOp.isDeclaration())
+    return emitError("Imported function must be a declaration but '")
+           << getCallee() << "' is defined";
+  return success();
 }
 
 //===----------------------------------------------------------------------===//

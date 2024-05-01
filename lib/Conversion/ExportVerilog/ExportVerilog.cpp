@@ -3657,7 +3657,7 @@ void NameCollector::collectNames(Block &block) {
     // at the result values since wires used by instances should be traversed
     // anyway.
     if (isa<InstanceOp, InstanceChoiceOp, InterfaceInstanceOp,
-            FuncCallProceduralOp, FuncCallOP>(op))
+            FuncCallProceduralOp, FuncCallOp>(op))
       continue;
     if (isa<ltl::LTLDialect, debug::DebugDialect>(op.getDialect()))
       continue;
@@ -4142,22 +4142,22 @@ LogicalResult StmtEmitter::visitSV(FuncCallProceduralOp op) {
   auto callee =
       cast<FuncOp>(state.symbolCache.getDefinition(op.getCalleeAttr()));
 
+  SmallPtrSet<Operation *, 8> ops;
+  ops.insert(op);
+
   auto explicitReturn = op.getExplicitlyReturnedValue(callee);
   if (explicitReturn) {
     assert(explicitReturn.hasOneUse());
     auto bpassignOp = cast<sv::BPAssignOp>(*explicitReturn.user_begin());
+    // TODO: Use assignEmitLike.
+    emitExpression(bpassignOp.getDest(), ops);
     ps << PP::space << "=" << PP::space;
-    ps.scopedBox(PP::ibox0, [&]() {
-      emitExpression(initValue, opsForLocation, LowestPrecedence,
-                     /*isAssignmentLikeContext=*/true);
-    });
   }
+
   auto arguments = callee.getPortList(true);
 
   ps << PPExtString(getSymOpName(callee)) << "(";
 
-  SmallPtrSet<Operation *, 8> ops;
-  ops.insert(op);
 
   bool needsComma = false;
   auto printArg = [&](Value value) {
