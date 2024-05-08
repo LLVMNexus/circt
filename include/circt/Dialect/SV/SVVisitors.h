@@ -44,7 +44,7 @@ public:
             // Type declarations.
             InterfaceOp, InterfaceSignalOp, InterfaceModportOp,
             InterfaceInstanceOp, GetModportOp, AssignInterfaceSignalOp,
-            ReadInterfaceSignalOp, MacroDeclOp, MacroDefOp,
+            ReadInterfaceSignalOp, MacroDeclOp, MacroDefOp, FuncDPIImportOp,
             FuncOp,
             // Verification statements.
             AssertOp, AssumeOp, CoverOp, AssertConcurrentOp, AssumeConcurrentOp,
@@ -144,6 +144,7 @@ public:
   HANDLE(ReadInterfaceSignalOp, Unhandled);
   HANDLE(MacroDefOp, Unhandled);
   HANDLE(MacroDeclOp, Unhandled);
+  HANDLE(FuncDPIImportOp, Unhandled);
   HANDLE(FuncOp, Unhandled);
 
   // Verification statements.
