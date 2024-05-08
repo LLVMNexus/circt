@@ -129,15 +129,17 @@ private:
 } // namespace circt
 
 // This function legalizes local names in the given module.
-static void legalizeModuleLocalNames(HWModuleOp module,
+static void legalizeModuleLocalNames(HWModuleLike module,
                                      const LoweringOptions &options,
                                      const GlobalNameTable &globalNameTable) {
   // A resolver for a local name collison.
   NameCollisionResolver nameResolver(options);
-  // Register names used by parameters.
-  for (auto param : module.getParameters())
-    nameResolver.insertUsedName(globalNameTable.getParameterVerilogName(
-        module, cast<ParamDeclAttr>(param).getName()));
+  if (auto hwModule = dyn_cast<hw::HWModuleOp>(*module)) {
+    // Register names used by parameters.
+    for (auto param : hwModule.getParameters())
+      nameResolver.insertUsedName(globalNameTable.getParameterVerilogName(
+          module, cast<ParamDeclAttr>(param).getName()));
+  }
 
   auto *ctxt = module.getContext();
 
@@ -257,7 +259,7 @@ GlobalNameResolver::GlobalNameResolver(mlir::ModuleOp topLevel,
 
   // Legalize names in HW modules parallelly.
   mlir::parallelForEach(
-      topLevel.getContext(), topLevel.getOps<HWModuleOp>(), [&](auto module) {
+      topLevel.getContext(), topLevel.getOps<HWModuleLike>(), [&](auto module) {
         legalizeModuleLocalNames(module, options, globalNameTable);
       });
 

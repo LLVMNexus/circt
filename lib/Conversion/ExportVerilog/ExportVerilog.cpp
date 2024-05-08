@@ -1404,7 +1404,7 @@ StringAttr ExportVerilog::inferStructuralNameForTemporary(Value expr) {
 
   // Module ports carry names!
   if (auto blockArg = dyn_cast<BlockArgument>(expr)) {
-    auto moduleOp = cast<HWModuleOp>(blockArg.getOwner()->getParentOp());
+    auto moduleOp = cast<HWModuleLike>(blockArg.getOwner()->getParentOp());
     StringRef name = getPortVerilogName(moduleOp, blockArg.getArgNumber());
     result = StringAttr::get(expr.getContext(), name);
 
@@ -6587,8 +6587,8 @@ LogicalResult circt::exportVerilog(ModuleOp module, llvm::raw_ostream &os) {
   LoweringOptions options(module);
   if (failed(lowerHWInstanceChoices(module)))
     return failure();
-  SmallVector<HWModuleOp> modulesToPrepare;
-  module.walk([&](HWModuleOp op) { modulesToPrepare.push_back(op); });
+  SmallVector<HWModuleLike> modulesToPrepare;
+  module.walk([&](HWModuleLike op) { modulesToPrepare.push_back(op); });
   if (failed(failableParallelForEach(
           module->getContext(), modulesToPrepare,
           [&](auto op) { return prepareHWModule(op, options); })))
@@ -6605,7 +6605,7 @@ struct ExportVerilogPass : public ExportVerilogBase<ExportVerilogPass> {
     mlir::OpPassManager preparePM("builtin.module");
     preparePM.addPass(createLegalizeAnonEnumsPass());
     preparePM.addPass(createHWLowerInstanceChoicesPass());
-    auto &modulePM = preparePM.nest<hw::HWModuleOp>();
+    auto &modulePM = preparePM.nestAny();
     modulePM.addPass(createPrepareForEmissionPass());
     if (failed(runPipeline(preparePM, getOperation())))
       return signalPassFailure();
@@ -6764,8 +6764,8 @@ LogicalResult circt::exportSplitVerilog(ModuleOp module, StringRef dirname) {
   LoweringOptions options(module);
   if (failed(lowerHWInstanceChoices(module)))
     return failure();
-  SmallVector<HWModuleOp> modulesToPrepare;
-  module.walk([&](HWModuleOp op) { modulesToPrepare.push_back(op); });
+  SmallVector<HWModuleLike> modulesToPrepare;
+  module.walk([&](HWModuleLike op) { modulesToPrepare.push_back(op); });
   if (failed(failableParallelForEach(
           module->getContext(), modulesToPrepare,
           [&](auto op) { return prepareHWModule(op, options); })))
