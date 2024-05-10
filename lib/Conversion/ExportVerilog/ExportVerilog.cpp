@@ -4186,22 +4186,21 @@ LogicalResult StmtEmitter::emitFunctionCall(CallOpTy op) {
 
   ps << PPExtString(getSymOpName(callee)) << "(";
 
-  bool needsComma = false;
-  auto printArg = [&](Value value) {
-    if (needsComma)
+  auto printArg = [&](size_t index, Value value) {
+    if (index)
       ps << "," << PP::space;
     emitExpression(value, ops);
-    needsComma = true;
   };
 
   ps.scopedBox(PP::ibox0, [&] {
     unsigned inputIndex = 0, outputIndex = 0;
-    for (auto arg : arguments) {
+    for (auto [index, arg] : llvm::enumerate(arguments)) {
       if (arg.dir == hw::ModulePort::Output)
         printArg(
+            index,
             op.getResults()[outputIndex++].getUsers().begin()->getOperand(0));
       else
-        printArg(op.getInputs()[inputIndex++]);
+        printArg(index, op.getInputs()[inputIndex++]);
     }
   });
 

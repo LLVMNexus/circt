@@ -272,10 +272,10 @@ GlobalNameResolver::GlobalNameResolver(mlir::ModuleOp topLevel,
   }
 
   // Legalize names in HW modules parallelly.
-  mlir::parallelForEach(
-      topLevel.getContext(), topLevel.getOps<HWModuleLike>(), [&](auto module) {
-        legalizeLocalNames(module, options, globalNameTable);
-      });
+  mlir::parallelForEach(topLevel.getContext(), topLevel.getOps<HWModuleLike>(),
+                        [&](auto module) {
+                          legalizeLocalNames(module, options, globalNameTable);
+                        });
 
   // Gather enum prefixes.
   gatherEnumPrefixes(topLevel);
