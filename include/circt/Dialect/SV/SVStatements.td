@@ -1057,3 +1057,16 @@ def ReturnOp : SVOp<"return",
   let assemblyFormat = "attr-dict ($operands^ `:` type($operands))?";
   let hasVerifier = 1;
 }
+// SV output control.
+//===----------------------------------------------------------------------===//
+
+def ReserveNamesOp : SVOp<"reserve_names", [
+  HasParent<"mlir::ModuleOp">
+]> {
+  let summary = "Disallow a set of names to be used during emission";
+
+  let arguments = (ins StrArrayAttr:$reservedNames);
+  let assemblyFormat = [{
+    $reservedNames attr-dict
+  }];
+}

@@ -25,6 +25,15 @@ using namespace hw;
 using namespace ExportVerilog;
 
 //===----------------------------------------------------------------------===//
+// GlobalNameTable
+//===----------------------------------------------------------------------===//
+
+void GlobalNameTable::addReservedNames(NameCollisionResolver &resolver) const {
+  for (auto &name : reservedNames)
+    resolver.insertUsedName(name);
+}
+
+//===----------------------------------------------------------------------===//
 // NameCollisionResolver
 //===----------------------------------------------------------------------===//
 
@@ -135,6 +144,8 @@ static void legalizeLocalNames(HWModuleLike module,
                                const GlobalNameTable &globalNameTable) {
   // A resolver for a local name collison.
   NameCollisionResolver nameResolver(options);
+
+  globalNameTable.addReservedNames(nameResolver);
   if (auto hwModule = dyn_cast<hw::HWModuleOp>(*module)) {
     // Register names used by parameters.
     for (auto param : hwModule.getParameters())
@@ -248,6 +259,12 @@ GlobalNameResolver::GlobalNameResolver(mlir::ModuleOp topLevel,
         op.emitError("name \"")
             << name << "\" is not allowed in Verilog output";
       globalNameResolver.insertUsedName(name);
+    } else if (auto reservedNamesOp = dyn_cast<sv::ReserveNamesOp>(op)) {
+      for (StringAttr name :
+           reservedNamesOp.getReservedNames().getAsRange<StringAttr>()) {
+        globalNameTable.reservedNames.insert(name);
+        globalNameResolver.insertUsedName(name);
+      }
     }
   }
 
