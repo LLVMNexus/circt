@@ -21,6 +21,9 @@
 #include "circt/Dialect/Seq/SeqTypes.h"
 #include "circt/Dialect/Sim/SimDialect.h"
 #include "circt/Support/BuilderUtils.h"
+#include "circt/Dialect/HW/HWOpInterfaces.h"
+#include "mlir/Interfaces/CallInterfaces.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 
 #define GET_OP_CLASSES
 #include "circt/Dialect/Sim/Sim.h.inc"
