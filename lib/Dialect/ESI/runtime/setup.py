@@ -79,6 +79,11 @@ class CMakeBuild(build_py):
     if cc is not None:
       cmake_args.append("-DCMAKE_C_COMPILER={}".format(cc))
 
+    if "VCPKG_INSTALLATION_ROOT" in os.environ:
+      cmake_args.append(
+          f"-DCMAKE_TOOLCHAIN_FILE={os.environ['VCPKG_INSTALLATION_ROOT']}/scripts/buildsystems/vcpkg.cmake"
+      )
+
     if "CIRCT_EXTRA_CMAKE_ARGS" in os.environ:
       cmake_args += os.environ["CIRCT_EXTRA_CMAKE_ARGS"].split(" ")
 
