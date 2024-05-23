@@ -70,6 +70,7 @@ add_circt_dialect_library(CIRCTFIRRTLTransforms
   CIRCTEmit
   CIRCTHW
   CIRCTOM
+  CIRCTSim
   CIRCTSV
   CIRCTSupport
   MLIRIR

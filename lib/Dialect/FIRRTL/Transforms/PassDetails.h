@@ -38,6 +38,10 @@ namespace debug {
 class DebugDialect;
 } // namespace debug
 
+namespace sim {
+class SimDialect;
+} // namespace debug
+
 namespace firrtl {
 
 #define GEN_PASS_CLASSES

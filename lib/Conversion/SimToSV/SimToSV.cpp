@@ -13,11 +13,13 @@
 #include "circt/Conversion/SimToSV.h"
 #include "../PassDetail.h"
 #include "circt/Dialect/Comb/CombOps.h"
+#include "circt/Dialect/Emit/EmitOps.h"
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/SV/SVOps.h"
 #include "circt/Dialect/Seq/SeqOps.h"
 #include "circt/Dialect/Sim/SimDialect.h"
 #include "circt/Dialect/Sim/SimOps.h"
+#include "circt/Support/Namespace.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
@@ -33,7 +35,9 @@ using namespace sim;
 namespace {
 
 struct SimConversionState {
-  std::atomic<bool> usedSynthesisMacro = false;
+  hw::HWModuleOp module;
+  bool usedSynthesisMacro = false;
+  SetVector<StringAttr> dpiCallees;
 };
 
 template <typename T>
@@ -157,14 +161,121 @@ public:
   }
 };
 
+class DPICallLowering : public SimConversionPattern<DPICallOp> {
+public:
+  using SimConversionPattern<DPICallOp>::SimConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(DPICallOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    auto loc = op.getLoc();
+    // Record the callee.
+    state.dpiCallees.insert(op.getCalleeAttr().getAttr());
+    assert(op.getClock() && "currently unclocked call is rejected by verifier");
+    assert(op.getNumResults() == 0 &&
+           "currently non-void function is rejected by verifer");
+    bool hasEnable = !!op.getEnable();
+
+    auto emitCall = [&]() {
+      rewriter.create<sv::FuncCallProceduralOp>(
+          op.getLoc(), op.getResultTypes(), op.getCalleeAttr(),
+          adaptor.getInputs());
+    };
+
+    Value clockCast =
+        rewriter.create<seq::FromClockOp>(loc, adaptor.getClock());
+    rewriter.create<sv::AlwaysOp>(
+        loc, ArrayRef<sv::EventControl>{sv::EventControl::AtPosEdge},
+        ArrayRef<Value>{clockCast}, [&]() {
+          if (!hasEnable)
+            return emitCall();
+          rewriter.create<sv::IfOp>(op.getLoc(), adaptor.getEnable(), emitCall);
+        });
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// A helper struct to lower DPI function/call.
+struct LowerDPIFunc {
+  llvm::DenseMap<StringAttr, StringAttr> symbolToFragment;
+  circt::Namespace nameSpace;
+  LowerDPIFunc(mlir::ModuleOp module) { nameSpace.add(module); }
+  void lower(sim::DPIFuncOp func);
+  void addFragments(hw::HWModuleOp module,
+                    ArrayRef<StringAttr> dpiCallees) const;
+};
+
+void LowerDPIFunc::lower(sim::DPIFuncOp func) {
+  ImplicitLocOpBuilder builder(func.getLoc(), func);
+  ArrayAttr inputLocsAttr, outputLocsAttr;
+  if (func.getArgumentLocs()) {
+    SmallVector<Attribute> inputLocs, outputLocs;
+    for (auto [port, loc] :
+         llvm::zip(func.getModuleType().getPorts(),
+                   func.getArgumentLocsAttr().getAsRange<LocationAttr>())) {
+      (port.dir == hw::ModulePort::Output ? outputLocs : inputLocs)
+          .push_back(loc);
+    }
+    inputLocsAttr = builder.getArrayAttr(inputLocs);
+    outputLocsAttr = builder.getArrayAttr(outputLocs);
+  }
+
+  // Create a function decl.
+  auto svFuncDecl =
+      builder.create<sv::FuncOp>(func.getSymNameAttr(), func.getModuleType(),
+                                 func.getPerArgumentAttrsAttr(), inputLocsAttr,
+                                 outputLocsAttr, func.getVerilogNameAttr());
+  // Declaration must be private.
+  svFuncDecl.setPrivate();
+
+
+  auto name = builder.getStringAttr(nameSpace.newName(
+      func.getSymNameAttr().getValue(), "dpi_import_fragment"));
+
+  builder.create<emit::FragmentOp>(name, [&]() {
+    builder.create<sv::FuncDPIImportOp>(func.getSymNameAttr(), StringAttr());
+  });
+
+  bool inserted = symbolToFragment.insert({func.getSymNameAttr(), name}).second;
+  assert(inserted && "function symbol must be unique");
+  func.erase();
+}
+
+void LowerDPIFunc::addFragments(hw::HWModuleOp module,
+                                ArrayRef<StringAttr> dpiCallees) const {
+  // Add existing fragments.
+  llvm::SetVector<Attribute> fragments;
+  if (auto exstingFragments =
+          module->getAttrOfType<ArrayAttr>(emit::getFragmentsAttrName()))
+    for (auto fragment : exstingFragments.getAsRange<FlatSymbolRefAttr>())
+      fragments.insert(fragment);
+
+  for (auto callee : dpiCallees)
+    fragments.insert(FlatSymbolRefAttr::get(symbolToFragment.at(callee)));
+
+  if (!fragments.empty())
+    module->setAttr(
+        emit::getFragmentsAttrName(),
+        ArrayAttr::get(module.getContext(), fragments.takeVector()));
+}
+
 namespace {
 struct SimToSVPass : public LowerSimToSVBase<SimToSVPass> {
   void runOnOperation() override {
     auto circuit = getOperation();
     MLIRContext *context = &getContext();
+    LowerDPIFunc lowerDPIFunc(circuit);
 
-    SimConversionState state;
+    // Lower DPI functions.
+    for (auto func :
+         llvm::make_early_inc_range(circuit.getOps<sim::DPIFuncOp>()))
+      lowerDPIFunc.lower(func);
+
+    std::atomic<bool> usedSynthesisMacro = false;
     auto lowerModule = [&](hw::HWModuleOp module) {
+      SimConversionState state;
       ConversionTarget target(*context);
       target.addIllegalDialect<SimDialect>();
       target.addLegalDialect<sv::SVDialect>();
@@ -179,14 +290,25 @@ struct SimToSVPass : public LowerSimToSVBase<SimToSVPass> {
                                                                        state);
       patterns.add<SimulatorStopLowering<sim::FatalOp, sv::FatalOp>>(context,
                                                                      state);
-      return applyPartialConversion(module, target, std::move(patterns));
+      patterns.add<DPICallLowering>(context, state);
+      auto result = applyPartialConversion(module, target, std::move(patterns));
+
+      if (failed(result))
+        return result;
+
+      // Set the emit fragment.
+      lowerDPIFunc.addFragments(module, state.dpiCallees.takeVector());
+
+      if (state.usedSynthesisMacro)
+        usedSynthesisMacro = true;
+      return result;
     };
 
     if (failed(mlir::failableParallelForEach(
             context, circuit.getOps<hw::HWModuleOp>(), lowerModule)))
       return signalPassFailure();
 
-    if (state.usedSynthesisMacro) {
+    if (usedSynthesisMacro) {
       Operation *op = circuit.lookupSymbol("SYNTHESIS");
       if (op) {
         if (!isa<sv::MacroDeclOp>(op)) {
