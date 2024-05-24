@@ -25,7 +25,7 @@ hw.module @dpi_call1(in %clock : !seq.clock, in %enable : i1, in %in: i1) {
   sim.func.dpi.call @dpi2(%in) clock %clock : (i1) -> ()
   // CHECK: %[[CLK:.+]] = seq.from_clock %clock
   // CHECK-NEXT: sv.always posedge %[[CLK]] {
-  // CHECK-NEXT:   sv.func.call.procedural @dpi2(%in) : (i1) -> () 
+  // CHECK-NEXT:   sv.func.call.procedural @dpi2(%in) : (i1) -> ()
   // CHECK-NEXT: }
 }
 

@@ -60,7 +60,7 @@ def FatalOp : SimOp<"fatal"> {
 def DPIFuncOp : SimOp<"func.dpi",
      [IsolatedFromAbove, Symbol, OpAsmOpInterface,
       FunctionOpInterface, HasParent<"mlir::ModuleOp">]> {
-  let summary = "A System Verilog function";
+  let summary = "A DPI function";
   let description = [{
     `sim.func.dpi` reresents SystemVerilog DPI function in SV spec 13.4.
   }];
@@ -100,10 +100,9 @@ def DPIFuncOp : SimOp<"func.dpi",
 def DPICallOp : SimOp<"func.dpi.call",
      [CallOpInterface, AttrSizedOperandSegments, 
       DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
-  let summary = "A call option for DPI function with optional clock and enable";
+  let summary = "Call DPI function with optional clock and enable";
   let description = [{
-    `sim.func.dpi.call` reresents SystemVerilog DPI function call. 
-
+    `sim.func.dpi.call` reresents SystemVerilog DPI function call.
   }];
 
   let arguments = (ins FlatSymbolRefAttr:$callee,
@@ -122,9 +121,11 @@ def DPICallOp : SimOp<"func.dpi.call",
     operand_range getArgOperands() {
       return getInputs();
     }
+
     MutableOperandRange getArgOperandsMutable() {
       return getInputsMutable();
     }
+
     mlir::CallInterfaceCallable getCallableForCallee() {
       return (*this)->getAttrOfType<mlir::SymbolRefAttr>("callee");
     }
