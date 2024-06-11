@@ -28,6 +28,7 @@ add_circt_dialect_library(CIRCTHW
   ${CIRCT_MAIN_INCLUDE_DIR}/circt/Dialect/HW
 
   DEPENDS
+  CIRCTEmitOpInterfacesIncGen
   MLIRHWIncGen
   MLIRHWAttrIncGen
   MLIRHWEnumsIncGen
