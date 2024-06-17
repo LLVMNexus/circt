@@ -262,14 +262,14 @@ void LowerDPIFunc::lower(sim::DPIFuncOp func) {
   auto svFuncDecl =
       builder.create<sv::FuncOp>(func.getSymNameAttr(), func.getModuleType(),
                                  func.getPerArgumentAttrsAttr(), inputLocsAttr,
-                                 outputLocsAttr, func.getVerilogNameAttr());
+                                 outputLocsAttr, StringAttr());
   // DPI function is a declaration so it must be a private function.
   svFuncDecl.setPrivate();
   auto name = builder.getStringAttr(nameSpace.newName(
       func.getSymNameAttr().getValue(), "dpi_import_fragument"));
 
   builder.create<emit::FragmentOp>(name, [&]() {
-    builder.create<sv::FuncDPIImportOp>(func.getSymNameAttr(), StringAttr());
+    builder.create<sv::FuncDPIImportOp>(func.getSymNameAttr(), func.getVerilogNameAttr());
   });
 
   symbolToFragment.insert({func.getSymNameAttr(), name});

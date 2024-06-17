@@ -4421,11 +4421,14 @@ LogicalResult StmtEmitter::visitSV(FuncDPIImportOp importOp) {
 
   ps << "import" << PP::nbsp << "\"DPI-C\"" << PP::nbsp;
 
-  // Emit a linkage name if provided.
-  if (auto linkageName = importOp.getLinkageName())
-    ps << *linkageName << PP::nbsp << "=" << PP::nbsp;
   auto op =
       cast<FuncOp>(state.symbolCache.getDefinition(importOp.getCalleeAttr()));
+
+  // Emit a linkage name if it's differenct from function's verilog name.
+  if (auto linkageName = importOp.getLinkageName()) {
+    if (getSymOpName(op) != linkageName)
+      ps << *linkageName << PP::nbsp << "=" << PP::nbsp;
+  }
   assert(op.isDeclaration() && "function must be a declaration");
   emitFunctionSignature(emitter, ps, op, /*isAutomatic=*/false,
                         /*emitAsTwoStateType=*/true);
