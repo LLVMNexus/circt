@@ -15,8 +15,10 @@
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/LLHD/IR/LLHDOps.h"
 #include "circt/Dialect/Moore/MooreOps.h"
+#include "circt/Dialect/Seq/SeqOps.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -90,6 +92,192 @@ static hw::ModulePortInfo getModulePortInfo(const TypeConverter &typeConverter,
   return hw::ModulePortInfo(inputs, outputs);
 }
 
+/// Lower `scf.if` into `comb.mux`.
+/// Example : if (cond1) a = 1; else if (cond2) a = 2; else a=3;
+/// post-conv: %0 = comb.mux %cond1, a=1, %1; %1 = comb.mux %cond2, a=2, a=3;
+static LogicalResult lowerSCFIfOp(scf::IfOp ifOp,
+                                  ConversionPatternRewriter &rewriter,
+                                  DenseMap<Operation *, Value> &muxMap,
+                                  SmallVector<Value> &allConds) {
+
+  Value cond, trueValue, falseValue;
+
+  // Traverse the 'else' region.
+  for (auto &elseOp : ifOp.getElseRegion().getOps()) {
+    // First to find the innermost 'else if' statement.
+    if (isa<scf::IfOp>(elseOp))
+      if (failed(lowerSCFIfOp(cast<scf::IfOp>(elseOp), rewriter, muxMap,
+                              allConds)))
+        return failure();
+
+    if (isa<NonBlockingAssignOp>(elseOp)) {
+      auto *dstOp = elseOp.getOperand(0).getDefiningOp();
+      auto srcValue = elseOp.getOperand(1);
+      muxMap[dstOp] = srcValue;
+    }
+  }
+
+  // Traverse the 'then' region.
+  for (auto &thenOp : ifOp.getThenRegion().getOps()) {
+
+    // First to find the innermost 'if' statement.
+    if (isa<scf::IfOp>(thenOp)) {
+      if (allConds.empty())
+        allConds.push_back(ifOp.getCondition());
+      allConds.push_back(thenOp.getOperand(0));
+      if (failed(lowerSCFIfOp(cast<scf::IfOp>(thenOp), rewriter, muxMap,
+                              allConds)))
+        return failure();
+    }
+
+    cond = ifOp.getCondition();
+    if (isa<NonBlockingAssignOp>(thenOp)) {
+      auto *dstOp = thenOp.getOperand(0).getDefiningOp();
+      trueValue = thenOp.getOperand(1);
+      trueValue = rewriter.getRemappedValue(trueValue);
+
+      // Maybe just the 'then' region exists. Like if(); no 'else'.
+      if (auto value = muxMap.lookup(dstOp)) {
+        falseValue = value;
+        falseValue = rewriter.getRemappedValue(falseValue);
+      } else
+        falseValue = rewriter.create<hw::ConstantOp>(thenOp.getLoc(),
+                                                     trueValue.getType(), 0);
+
+      auto b = ifOp.getThenBodyBuilder();
+
+      if (allConds.size() > 1) {
+        cond = b.create<comb::AndOp>(ifOp.getLoc(), allConds, false);
+        allConds.pop_back();
+      }
+
+      auto muxOp =
+          b.create<comb::MuxOp>(ifOp.getLoc(), cond, trueValue, falseValue);
+      muxMap[dstOp] = muxOp;
+    }
+  }
+  rewriter.inlineBlockBefore(&ifOp.getThenRegion().front(), ifOp);
+  if (!ifOp.getElseRegion().empty()) {
+    rewriter.inlineBlockBefore(&ifOp.getElseRegion().front(), ifOp);
+  }
+  rewriter.eraseOp(ifOp);
+  return success();
+}
+
+/// Lower `always` with an explicit sensitivity list and clock edges to `seq`,
+/// otherwise to `comb`.
+static LogicalResult lowerAlways(ProcedureOp procedureOp,
+                                 ConversionPatternRewriter &rewriter) {
+  // The default is a synchronization.
+  bool isAsync = false;
+
+  // The default is the combinational logic unit.
+  bool isCombination = true;
+
+  // Assume the reset value is at the then region.
+  bool atThenRegion = true;
+
+  // Assume we can correctly lower `scf.if`.
+  bool falseLowerIf = false;
+
+  Value clk, rst, input, rstValue;
+
+  // Collect all signals.
+  DenseMap<Value, moore::Edge> senLists;
+
+  // Collect `comb.mux`.
+  DenseMap<Operation *, Value> muxMap;
+
+  for (auto &nestOp : procedureOp.getBodyRegion().getOps()) {
+    TypeSwitch<Operation *, void>(&nestOp)
+        .Case<EventOp>([&](auto op) {
+          if (op.getEdge() != moore::Edge::None)
+            isCombination = false;
+          senLists.insert({op.getInput(), op.getEdge()});
+          if (auto readOp = llvm::dyn_cast_or_null<moore::ReadOp>(
+                  op.getInput().getDefiningOp()))
+            for (auto *user : readOp.getInput().getUsers())
+              if (isa<NotOp, ConversionOp>(user)) {
+                isAsync = true;
+                auto edge = senLists.lookup(op.getInput());
+                // Represent reset value doesn't at `then` region.
+                if ((edge == Edge::PosEdge && isa<NotOp>(user)) ||
+                    (edge == Edge::NegEdge && isa<ConversionOp>(user)) ||
+                    (!isAsync && isa<NotOp>(user)))
+                  atThenRegion = false;
+
+                rst = rewriter.getRemappedValue(op.getInput());
+                senLists.erase(op.getInput());
+              }
+        })
+        .Case<NonBlockingAssignOp>([&](auto op) {
+          input = rewriter.getRemappedValue(op.getSrc());
+
+          // Get the clock signal.
+          if (!clk) {
+            clk = senLists.begin()->first;
+            clk = rewriter.getRemappedValue(clk);
+            clk = rewriter.create<seq::ToClockOp>(procedureOp->getLoc(), clk);
+          }
+
+          auto name =
+              cast<VariableOp>(op.getDst().getDefiningOp()).getNameAttr();
+          auto regOp = rewriter.create<seq::FirRegOp>(procedureOp->getLoc(),
+                                                      input, clk, name);
+
+          // Update the variables.
+          auto from = rewriter.getRemappedValue(op.getDst());
+          rewriter.replaceOp(from.getDefiningOp(), regOp);
+        })
+        .Case<scf::IfOp>([&](auto op) {
+          SmallVector<Value> allConds;
+          if (failed(lowerSCFIfOp(op, rewriter, muxMap, allConds))) {
+            falseLowerIf = true;
+            return;
+          }
+
+          // Get the clock signal.
+          clk = senLists.begin()->first;
+          clk = rewriter.getRemappedValue(clk);
+          clk = rewriter.create<seq::ToClockOp>(procedureOp->getLoc(), clk);
+          if (!rst)
+            rst = op.getCondition();
+
+          for (auto muxOp : muxMap) {
+            auto name = cast<VariableOp>(muxOp.first).getNameAttr();
+            auto *defOp = muxOp.second.getDefiningOp();
+
+            input = atThenRegion ? defOp->getOperand(2) : defOp->getOperand(1);
+            rstValue =
+                atThenRegion ? defOp->getOperand(1) : defOp->getOperand(2);
+
+            auto regOp = rst ? rewriter.create<seq::FirRegOp>(
+                                   procedureOp->getLoc(), input, clk, name, rst,
+                                   rstValue, hw::InnerSymAttr{}, isAsync)
+                             : rewriter.create<seq::FirRegOp>(
+                                   procedureOp->getLoc(), input, clk, name);
+
+            // Update the variables.
+            auto from = rewriter.getRemappedValue(muxOp.first->getResult(0));
+            rewriter.replaceOp(from.getDefiningOp(), regOp);
+          }
+        });
+
+    if (falseLowerIf)
+      return failure();
+
+    // Always represents a combinational logic unit.
+    // Like `always @(a, b, ...)` and `always @(*)`.
+    if (isCombination) {
+      rewriter.inlineBlockBefore(procedureOp.getBody(), procedureOp);
+      return success();
+    }
+  }
+
+  rewriter.inlineBlockBefore(procedureOp.getBody(), procedureOp);
+  return success();
+}
+
 //===----------------------------------------------------------------------===//
 // Structural Conversion
 //===----------------------------------------------------------------------===//
@@ -140,6 +328,82 @@ struct InstanceOpConversion : public OpConversionPattern<InstanceOp> {
     // Replace uses chain and erase the original op.
     op.replaceAllUsesWith(instOp.getResults());
     rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct ProcedureOpConversion : public OpConversionPattern<ProcedureOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(ProcedureOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    switch (adaptor.getKind()) {
+    case ProcedureKind::AlwaysComb:
+      rewriter.inlineBlockBefore(op.getBody(), op);
+      rewriter.eraseOp(op);
+      return success();
+    case ProcedureKind::Always:
+      if (failed(lowerAlways(op, rewriter)))
+        return failure();
+      rewriter.eraseOp(op);
+      return success();
+    case ProcedureKind::AlwaysFF:
+    case ProcedureKind::AlwaysLatch:
+    case ProcedureKind::Initial:
+    case ProcedureKind::Final:
+      return emitError(op->getLoc(), "Unsupported procedure operation");
+    };
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// Declaration Conversion
+//===----------------------------------------------------------------------===//
+
+struct VariableOpConversion : public OpConversionPattern<VariableOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(VariableOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Type resultType = typeConverter->convertType(op.getResult().getType());
+    Value init = adaptor.getInitial();
+    if (!init)
+      init = rewriter.create<hw::ConstantOp>(op->getLoc(), resultType, 0);
+    rewriter.replaceOpWithNewOp<llhd::SigOp>(op, llhd::SigType::get(resultType),
+                                             op.getName(), init);
+
+    // TODO: Unsupport x/z, so the initial value is 0.
+    // if (!init &&
+    //     cast<RefType>(op.getResult().getType()).getNestedType().getDomain()
+    //     ==
+    //         Domain::FourValued)
+    //   return emitError(
+    //       op->getLoc(),
+    //       "unsupport a variable of four-state value without an initial
+    //       value");
+    // if (!init)
+    //   init = rewriter.create<hw::ConstantOp>(op->getLoc(), resultType, 0);
+
+    // rewriter.replaceOpWithNewOp<hw::WireOp>(
+    //     op, resultType, init, adaptor.getNameAttr(), hw::InnerSymAttr{});
+    return success();
+  }
+};
+
+struct NetOpConversion : public OpConversionPattern<NetOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(NetOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Type resultType = typeConverter->convertType(op.getResult().getType());
+    Value init = adaptor.getAssignment();
+    if (!init)
+      init = rewriter.create<hw::ConstantOp>(op->getLoc(), resultType, 0);
+    rewriter.replaceOpWithNewOp<llhd::SigOp>(op, llhd::SigType::get(resultType),
+                                             op.getName(), init);
     return success();
   }
 };
@@ -227,6 +491,27 @@ struct ExtractOpConversion : public OpConversionPattern<ExtractOp> {
         rewriter.create<comb::ShrUOp>(op->getLoc(), adaptor.getInput(), amount);
 
     rewriter.replaceOpWithNewOp<comb::ExtractOp>(op, resultType, value, 0);
+    return success();
+  }
+};
+
+struct ExtractRefOpConversion : public OpConversionPattern<ExtractRefOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ExtractRefOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Type resultType = typeConverter->convertType(op.getResult().getType());
+    unsigned int width =
+        op.getInput().getType().getNestedType().getBitSize().value();
+    if (width > 1)
+      width = llvm::Log2_64_Ceil(
+          op.getInput().getType().getNestedType().getBitSize().value());
+    Value amount =
+        adjustIntegerWidth(rewriter, adaptor.getLowBit(), width, op->getLoc());
+    rewriter.replaceOpWithNewOp<llhd::SigExtractOp>(
+        op, llhd::SigType::get(resultType), adaptor.getInput(), amount);
+
     return success();
   }
 };
@@ -347,6 +632,43 @@ struct ConversionOpConversion : public OpConversionPattern<ConversionOp> {
   }
 };
 
+struct ConditionalOpConversion : public OpConversionPattern<ConditionalOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ConditionalOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+
+    auto trueValue =
+        adaptor.getTrueRegion().front().getTerminator()->getOperand(0);
+    trueValue = rewriter.getRemappedValue(trueValue);
+
+    auto falseValue =
+        adaptor.getFalseRegion().front().getTerminator()->getOperand(0);
+    falseValue = rewriter.getRemappedValue(falseValue);
+
+    rewriter.inlineBlockBefore(&op.getTrueRegion().front(), op);
+    rewriter.inlineBlockBefore(&op.getFalseRegion().front(), op);
+
+    rewriter.replaceOpWithNewOp<comb::MuxOp>(op, adaptor.getCondition(),
+                                             trueValue, falseValue);
+
+    return success();
+  }
+};
+
+struct YieldOpConversion : public OpConversionPattern<YieldOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(YieldOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // Statement Conversion
 //===----------------------------------------------------------------------===//
@@ -389,6 +711,34 @@ struct ReturnOpConversion : public OpConversionPattern<func::ReturnOp> {
   matchAndRewrite(func::ReturnOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     rewriter.replaceOpWithNewOp<func::ReturnOp>(op, adaptor.getOperands());
+    return success();
+  }
+};
+
+struct SCFIfOpConversion : public OpConversionPattern<scf::IfOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(scf::IfOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+
+    DenseMap<Operation *, Value> muxMap;
+    SmallVector<Value> allConds;
+    if (failed(lowerSCFIfOp(op, rewriter, muxMap, allConds)))
+      return failure();
+
+    return success();
+  }
+};
+
+struct SCFYieldOpConversion : public OpConversionPattern<scf::YieldOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(scf::YieldOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+
+    rewriter.eraseOp(op);
     return success();
   }
 };
@@ -511,6 +861,81 @@ struct AShrOpConversion : public OpConversionPattern<AShrOp> {
   }
 };
 
+struct ReadOpConversion : public OpConversionPattern<ReadOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ReadOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Type resultType = typeConverter->convertType(op.getResult().getType());
+    rewriter.replaceOpWithNewOp<llhd::PrbOp>(op, resultType,
+                                             adaptor.getInput());
+    return success();
+  }
+};
+
+struct EventOpConv : public OpConversionPattern<EventOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(EventOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct AssignOpConversion : public OpConversionPattern<ContinuousAssignOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ContinuousAssignOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto x =
+        llhd::TimeAttr::get(op->getContext(), unsigned(0),
+                            llvm::StringRef("ns"), unsigned(0), unsigned(0));
+    auto time = rewriter.create<llhd::ConstantTimeOp>(op->getLoc(), x);
+    adaptor.getDst().setType(
+        llhd::SigType::get(op->getContext(), adaptor.getDst().getType()));
+    rewriter.replaceOpWithNewOp<llhd::DrvOp>(op, adaptor.getDst(),
+                                             adaptor.getSrc(), time, Value{});
+    return success();
+  }
+};
+
+struct BAssignOpConversion : public OpConversionPattern<BlockingAssignOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(BlockingAssignOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto x =
+        llhd::TimeAttr::get(op->getContext(), unsigned(0),
+                            llvm::StringRef("ns"), unsigned(0), unsigned(0));
+    auto time = rewriter.create<llhd::ConstantTimeOp>(op->getLoc(), x);
+    rewriter.replaceOpWithNewOp<llhd::DrvOp>(op, adaptor.getDst(),
+                                             adaptor.getSrc(), time, Value{});
+    return success();
+  }
+};
+
+struct NonBAssignOpConversion
+    : public OpConversionPattern<NonBlockingAssignOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(NonBlockingAssignOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto x =
+        llhd::TimeAttr::get(op->getContext(), unsigned(0),
+                            llvm::StringRef("ns"), unsigned(0), unsigned(0));
+    auto time = rewriter.create<llhd::ConstantTimeOp>(op->getLoc(), x);
+    rewriter.replaceOpWithNewOp<llhd::DrvOp>(op, adaptor.getDst(),
+                                             adaptor.getSrc(), time, Value{});
+    return success();
+  }
+};
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -540,12 +965,15 @@ static void populateLegality(ConversionTarget &target) {
   target.addLegalDialect<hw::HWDialect>();
   target.addLegalDialect<llhd::LLHDDialect>();
   target.addLegalDialect<comb::CombDialect>();
+  // target.addLegalDialect<mlir::scf::SCFDialect>();
 
   addGenericLegality<cf::CondBranchOp>(target);
   addGenericLegality<cf::BranchOp>(target);
   addGenericLegality<func::CallOp>(target);
   addGenericLegality<func::ReturnOp>(target);
   addGenericLegality<UnrealizedConversionCastOp>(target);
+  addGenericLegality<scf::WhileOp>(target);
+  addGenericLegality<scf::ConditionOp>(target);
 
   target.addDynamicallyLegalOp<func::FuncOp>([](func::FuncOp op) {
     auto argsConverted = llvm::none_of(op.getBlocks(), [](auto &block) {
@@ -567,11 +995,32 @@ static void populateLegality(ConversionTarget &target) {
 
   target.addDynamicallyLegalOp<hw::OutputOp>(
       [](hw::OutputOp op) { return !hasMooreType(op.getOutputs()); });
+
+  target.addDynamicallyLegalOp<scf::YieldOp>([](scf::YieldOp op) {
+    return isa<scf::WhileOp>(op->getParentOp()) &&
+           cast<scf::WhileOp>(op->getParentOp())
+                   .getAfterBody()
+                   ->getTerminator() == op;
+  });
 }
 
 static void populateTypeConversion(TypeConverter &typeConverter) {
   typeConverter.addConversion([&](IntType type) {
     return mlir::IntegerType::get(type.getContext(), type.getWidth());
+  });
+  typeConverter.addConversion([&](UnpackedType type) {
+    return mlir::IntegerType::get(type.getContext(), *type.getBitSize());
+  });
+
+  typeConverter.addConversion([&](RefType type) -> std::optional<Type> {
+    if (auto nestedType = llvm::dyn_cast_or_null<IntType>(type.getNestedType()))
+      return mlir::IntegerType::get(nestedType.getContext(),
+                                    nestedType.getWidth());
+    if (auto nestedType =
+            llvm::dyn_cast_or_null<UnpackedType>(type.getNestedType()))
+      return mlir::IntegerType::get(nestedType.getContext(),
+                                    *nestedType.getBitSize());
+    return std::nullopt;
   });
 
   // Valid target types.
@@ -600,10 +1049,14 @@ static void populateOpConversion(RewritePatternSet &patterns,
   auto *context = patterns.getContext();
   // clang-format off
   patterns.add<
+    // Patterns of declaration operations.
+    VariableOpConversion, NetOpConversion,
+    
     // Patterns of miscellaneous operations.
     ConstantOpConv, ConcatOpConversion, ReplicateOpConversion,
-    ExtractOpConversion, ConversionOpConversion,
-    NamedConstantOpConv,
+    ExtractOpConversion, ExtractRefOpConversion, ConversionOpConversion,
+    NamedConstantOpConv, ReadOpConversion, ProcedureOpConversion,
+    EventOpConv,
 
     // Patterns of unary operations.
     ReduceAndOpConversion, ReduceOrOpConversion, ReduceXorOpConversion,
@@ -643,8 +1096,15 @@ static void populateOpConversion(RewritePatternSet &patterns,
     // Patterns of shifting operations.
     ShrOpConversion, ShlOpConversion, AShrOpConversion,
 
+    // Patterns of assignment operations.
+    AssignOpConversion, BAssignOpConversion, NonBAssignOpConversion,
+
     // Patterns of branch operations.
-    CondBranchOpConversion, BranchOpConversion,
+    CondBranchOpConversion, BranchOpConversion, ConditionalOpConversion,
+    SCFIfOpConversion, 
+
+    // Patterns of terminator operations.
+    YieldOpConversion, SCFYieldOpConversion,
 
     // Patterns of other operations outside Moore dialect.
     HWOutputOpConversion, HWInstanceOpConversion, ReturnOpConversion,
