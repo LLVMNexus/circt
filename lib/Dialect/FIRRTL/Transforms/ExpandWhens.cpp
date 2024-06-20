@@ -17,6 +17,7 @@
 #include "circt/Dialect/FIRRTL/FIRRTLVisitors.h"
 #include "circt/Dialect/FIRRTL/Passes.h"
 #include "circt/Support/FieldRef.h"
+#include "mlir/IR/Threading.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
 
@@ -789,11 +790,17 @@ class ExpandWhensPass : public ExpandWhensBase<ExpandWhensPass> {
 } // end anonymous namespace
 
 void ExpandWhensPass::runOnOperation() {
-  ModuleVisitor visitor;
-  if (!visitor.run(getOperation()))
-    markAllAnalysesPreserved();
-  if (failed(visitor.checkInitialization()))
-    signalPassFailure();
+  std::atomic<bool> failedSome = false;
+  auto circuit = getOperation();
+  auto check = [&failedSome](FModuleLike op) {
+    ModuleVisitor visitor;
+    (void)visitor.run(op);
+    if (failed(visitor.checkInitialization()))
+      failedSome = true;
+  };
+  mlir::parallelForEach(&getContext(), circuit.getOps<FModuleLike>(), check);
+  if (failedSome)
+    return signalPassFailure();
 }
 
 std::unique_ptr<mlir::Pass> circt::firrtl::createExpandWhensPass() {

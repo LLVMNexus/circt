@@ -1,4 +1,4 @@
-// RUN: circt-opt --pass-pipeline='builtin.module(firrtl.circuit(any(firrtl-expand-whens)))' %s | FileCheck %s
+// RUN: circt-opt --pass-pipeline='builtin.module(firrtl.circuit(firrtl-expand-whens))' %s | FileCheck %s
 firrtl.circuit "ExpandWhens" {
 firrtl.module @ExpandWhens () {}
 

@@ -317,7 +317,7 @@ def LowerMatches : Pass<"firrtl-lower-matches", "firrtl::FModuleOp"> {
   let constructor = "circt::firrtl::createLowerMatchesPass()";
 }
 
-def ExpandWhens : InterfacePass<"firrtl-expand-whens", "firrtl::FModuleLike"> {
+def ExpandWhens : Pass<"firrtl-expand-whens", "firrtl::CircuitOp"> {
   let summary = "Remove all when conditional blocks.";
   let description = [{
     This pass will:
@@ -342,6 +342,7 @@ def ExpandWhens : InterfacePass<"firrtl-expand-whens", "firrtl::FModuleLike"> {
   }];
   let constructor = "circt::firrtl::createExpandWhensPass()";
 }
+
 
 def LowerCHIRRTLPass : Pass<"firrtl-lower-chirrtl", "firrtl::FModuleOp"> {
   let summary = "Infer the memory ports of SeqMem and CombMem";

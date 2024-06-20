@@ -32,7 +32,8 @@ LogicalResult firtool::populatePreprocessTransforms(mlir::PassManager &pm,
   pm.nest<firrtl::CircuitOp>().addPass(firrtl::createResolvePathsPass());
 
   pm.nest<firrtl::CircuitOp>().addPass(firrtl::createLowerFIRRTLAnnotationsPass(
-      opt.shouldDisableUnknownAnnotations(),
+      // opt.shouldDisableUnknownAnnotations(),
+      true,
       opt.shouldDisableClasslessAnnotations(),
       opt.shouldLowerNoRefTypePortAnnotations(),
       opt.shouldAllowAddingPortsOnPublic()));
@@ -116,8 +117,9 @@ LogicalResult firtool::populateCHIRRTLToLowFIRRTL(mlir::PassManager &pm,
   pm.addNestedPass<firrtl::CircuitOp>(firrtl::createLowerFIRRTLTypesPass(
       opt.getPreserveAggregate(), firrtl::PreserveAggregate::None));
 
+  pm.addNestedPass<firrtl::CircuitOp>(firrtl::createExpandWhensPass());
+
   auto &modulePM = pm.nest<firrtl::CircuitOp>().nest<firrtl::FModuleOp>();
-  modulePM.addPass(firrtl::createExpandWhensPass());
   modulePM.addPass(firrtl::createSFCCompatPass());
   modulePM.addPass(firrtl::createLayerMergePass());
   modulePM.addPass(firrtl::createLayerSinkPass());

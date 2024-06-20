@@ -1,4 +1,4 @@
-// RUN: circt-opt --pass-pipeline='builtin.module(firrtl.circuit(any(firrtl-expand-whens)))' -verify-diagnostics --split-input-file %s
+// RUN: circt-opt --pass-pipeline='builtin.module(firrtl.circuit(firrtl-expand-whens))' -verify-diagnostics --split-input-file %s
 
 // This test is checking each kind of declaration to ensure that it is caught
 // by the initialization coverage check. This is also testing that we can emit
