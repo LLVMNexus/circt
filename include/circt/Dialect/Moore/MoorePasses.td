@@ -29,4 +29,14 @@ def SimplifyProcedures : Pass<"simplify-procedures", "moore::SVModuleOp"> {
     let constructor = "circt::moore::createSimplifyProceduresPass()";
 }
 
+def SimplifyAssigns : Pass<"simplify-assigns", "moore::SVModuleOp"> {
+    let summary = "Simplify assigns";
+    let description = [{
+      It's used to desassemble the LHS of assignments that have a form like
+      "{a, b} = c" onto "a = c[9001:42];" and "b = c[41:0]". Aimed at
+      conveniently lowering this kind of assignment.
+    }];
+    let constructor = "circt::moore::createSimplifyAssignsPass()";
+}
+
 #endif // CIRCT_DIALECT_MOORE_MOOREPASSES_TD

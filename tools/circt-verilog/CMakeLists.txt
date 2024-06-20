@@ -8,5 +8,6 @@ target_link_libraries(circt-verilog PRIVATE
   CIRCTImportVerilog
   CIRCTMooreToCore
   CIRCTSupport
+  CIRCTMooreTransforms
   MLIRIR
 )
