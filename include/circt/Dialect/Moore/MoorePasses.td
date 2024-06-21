@@ -15,7 +15,18 @@
 
 include "mlir/Pass/PassBase.td"
 
-def SimplifyProcedures : Pass<"simplify-procedures", "moore::SVModuleOp"> {
+def InfoCollection : Pass<"info-collection", "mlir::ModuleOp"> {
+    let summary = "Collect all nets and variables declarations";
+    let description = [{
+      This pass will perform a pre-pass over the IR to find all concurrently-
+      assigned nets and variables. Basically go through all net/variable 
+      declarations and collect the connected value in a hash map (either the
+      initial value in net declaration or the assigned value).
+    }];
+    let constructor = "circt::moore::createInfoCollectionPass()";
+}
+
+def SimplifyProcedures : Pass<"moore-simplify-procedures", "moore::SVModuleOp"> {
     let summary = "Simplify procedures";
     let description = [{
       Cause we want to introduce mem2reg in the moore dialect to eliminate the
@@ -29,7 +40,7 @@ def SimplifyProcedures : Pass<"simplify-procedures", "moore::SVModuleOp"> {
     let constructor = "circt::moore::createSimplifyProceduresPass()";
 }
 
-def SimplifyAssigns : Pass<"simplify-assigns", "moore::SVModuleOp"> {
+def SimplifyAssigns : Pass<"moore-simplify-assigns", "moore::SVModuleOp"> {
     let summary = "Simplify assigns";
     let description = [{
       It's used to desassemble the LHS of assignments that have a form like

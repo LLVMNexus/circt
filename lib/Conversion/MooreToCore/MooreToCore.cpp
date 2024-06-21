@@ -15,6 +15,7 @@
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/LLHD/IR/LLHDOps.h"
 #include "circt/Dialect/Moore/MooreOps.h"
+#include "circt/Dialect/Moore/MoorePasses.h"
 #include "circt/Dialect/Seq/SeqOps.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -34,13 +35,14 @@ using namespace circt;
 using namespace moore;
 
 using comb::ICmpPredicate;
+InfoCollection moore::decl;
 
 namespace {
 
 /// Returns the passed value if the integer width is already correct.
 /// Zero-extends if it is too narrow.
-/// Truncates if the integer is too wide and the truncated part is zero, if it
-/// is not zero it returns the max value integer of target-width.
+/// Truncates if the integer is too wide and the truncated part is zero, if
+/// it is not zero it returns the max value integer of target-width.
 static Value adjustIntegerWidth(OpBuilder &builder, Value value,
                                 uint32_t targetWidth, Location loc) {
   uint32_t intWidth = value.getType().getIntOrFloatBitWidth();
@@ -371,12 +373,14 @@ struct VariableOpConversion : public OpConversionPattern<VariableOp> {
     Value init = adaptor.getInitial();
     if (!init)
       init = rewriter.create<hw::ConstantOp>(op->getLoc(), resultType, 0);
-    rewriter.replaceOpWithNewOp<llhd::SigOp>(op, llhd::SigType::get(resultType),
-                                             op.getName(), init);
+
+    // rewriter.replaceOpWithNewOp<llhd::SigOp>(op,
+    // llhd::SigType::get(resultType),
+    //                                          op.getName(), init);
 
     // TODO: Unsupport x/z, so the initial value is 0.
     // if (!init &&
-    //     cast<RefType>(op.getResult().getType()).getNestedType().getDomain()
+    // cast<RefType>(op.getResult().getType()).getNestedType().getDomain()
     //     ==
     //         Domain::FourValued)
     //   return emitError(
@@ -407,6 +411,25 @@ struct NetOpConversion : public OpConversionPattern<NetOp> {
     return success();
   }
 };
+
+// template <typename OpTy>
+// struct DeclOpConversion : public OpConversionPattern<OpTy> {
+//   using OpConversionPattern<OpTy>::OpConversionPattern;
+//   using OpAdaptor = typename OpTy::Adaptor;
+//   LogicalResult
+//   matchAndRewrite(OpTy op, OpAdaptor adaptor,
+//                   ConversionPatternRewriter &rewriter) const override {
+//     Value value = decl.getValue(op);
+//     if (!value) {
+//       rewriter.eraseOp(op);
+//       return success();
+//     }
+
+//     value = rewriter.getRemappedValue(value);
+//     rewriter.replaceOpWithNewOp<hw::WireOp>(op, value, op.getNameAttr());
+//     return success();
+//   }
+// };
 
 //===----------------------------------------------------------------------===//
 // Expression Conversion
@@ -885,53 +908,70 @@ struct EventOpConv : public OpConversionPattern<EventOp> {
   }
 };
 
-struct AssignOpConversion : public OpConversionPattern<ContinuousAssignOp> {
-  using OpConversionPattern::OpConversionPattern;
+// struct AssignOpConversion : public OpConversionPattern<ContinuousAssignOp> {
+//   using OpConversionPattern::OpConversionPattern;
+
+//   LogicalResult
+//   matchAndRewrite(ContinuousAssignOp op, OpAdaptor adaptor,
+//                   ConversionPatternRewriter &rewriter) const override {
+//     auto x =
+//         llhd::TimeAttr::get(op->getContext(), unsigned(0),
+//                             llvm::StringRef("ns"), unsigned(0), unsigned(0));
+//     auto time = rewriter.create<llhd::ConstantTimeOp>(op->getLoc(), x);
+//     adaptor.getDst().setType(
+//         llhd::SigType::get(op->getContext(), adaptor.getDst().getType()));
+//     rewriter.replaceOpWithNewOp<llhd::DrvOp>(op, adaptor.getDst(),
+//                                              adaptor.getSrc(), time,
+//                                              Value{});
+//     return success();
+//   }
+// };
+
+// struct BAssignOpConversion : public OpConversionPattern<BlockingAssignOp> {
+//   using OpConversionPattern::OpConversionPattern;
+
+//   LogicalResult
+//   matchAndRewrite(BlockingAssignOp op, OpAdaptor adaptor,
+//                   ConversionPatternRewriter &rewriter) const override {
+//     auto x =
+//         llhd::TimeAttr::get(op->getContext(), unsigned(0),
+//                             llvm::StringRef("ns"), unsigned(0), unsigned(0));
+//     auto time = rewriter.create<llhd::ConstantTimeOp>(op->getLoc(), x);
+//     rewriter.replaceOpWithNewOp<llhd::DrvOp>(op, adaptor.getDst(),
+//                                              adaptor.getSrc(), time,
+//                                              Value{});
+//     return success();
+//   }
+// };
+
+// struct NonBAssignOpConversion
+//     : public OpConversionPattern<NonBlockingAssignOp> {
+//   using OpConversionPattern::OpConversionPattern;
+
+//   LogicalResult
+//   matchAndRewrite(NonBlockingAssignOp op, OpAdaptor adaptor,
+//                   ConversionPatternRewriter &rewriter) const override {
+//     auto x =
+//         llhd::TimeAttr::get(op->getContext(), unsigned(0),
+//                             llvm::StringRef("ns"), unsigned(0), unsigned(0));
+//     auto time = rewriter.create<llhd::ConstantTimeOp>(op->getLoc(), x);
+//     rewriter.replaceOpWithNewOp<llhd::DrvOp>(op, adaptor.getDst(),
+//                                              adaptor.getSrc(), time,
+//                                              Value{});
+//     return success();
+//   }
+// };
+
+template <typename SourceOp>
+struct AssignOpConversion : public OpConversionPattern<SourceOp> {
+  using OpConversionPattern<SourceOp>::OpConversionPattern;
+  using OpAdaptor = typename SourceOp::Adaptor;
 
   LogicalResult
-  matchAndRewrite(ContinuousAssignOp op, OpAdaptor adaptor,
+  matchAndRewrite(SourceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto x =
-        llhd::TimeAttr::get(op->getContext(), unsigned(0),
-                            llvm::StringRef("ns"), unsigned(0), unsigned(0));
-    auto time = rewriter.create<llhd::ConstantTimeOp>(op->getLoc(), x);
-    adaptor.getDst().setType(
-        llhd::SigType::get(op->getContext(), adaptor.getDst().getType()));
-    rewriter.replaceOpWithNewOp<llhd::DrvOp>(op, adaptor.getDst(),
-                                             adaptor.getSrc(), time, Value{});
-    return success();
-  }
-};
 
-struct BAssignOpConversion : public OpConversionPattern<BlockingAssignOp> {
-  using OpConversionPattern::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(BlockingAssignOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    auto x =
-        llhd::TimeAttr::get(op->getContext(), unsigned(0),
-                            llvm::StringRef("ns"), unsigned(0), unsigned(0));
-    auto time = rewriter.create<llhd::ConstantTimeOp>(op->getLoc(), x);
-    rewriter.replaceOpWithNewOp<llhd::DrvOp>(op, adaptor.getDst(),
-                                             adaptor.getSrc(), time, Value{});
-    return success();
-  }
-};
-
-struct NonBAssignOpConversion
-    : public OpConversionPattern<NonBlockingAssignOp> {
-  using OpConversionPattern::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(NonBlockingAssignOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    auto x =
-        llhd::TimeAttr::get(op->getContext(), unsigned(0),
-                            llvm::StringRef("ns"), unsigned(0), unsigned(0));
-    auto time = rewriter.create<llhd::ConstantTimeOp>(op->getLoc(), x);
-    rewriter.replaceOpWithNewOp<llhd::DrvOp>(op, adaptor.getDst(),
-                                             adaptor.getSrc(), time, Value{});
+    rewriter.eraseOp(op);
     return success();
   }
 };
@@ -1051,6 +1091,7 @@ static void populateOpConversion(RewritePatternSet &patterns,
   patterns.add<
     // Patterns of declaration operations.
     VariableOpConversion, NetOpConversion,
+    // DeclOpConversion<VariableOp>, DeclOpConversion<NetOp>,
     
     // Patterns of miscellaneous operations.
     ConstantOpConv, ConcatOpConversion, ReplicateOpConversion,
@@ -1097,7 +1138,9 @@ static void populateOpConversion(RewritePatternSet &patterns,
     ShrOpConversion, ShlOpConversion, AShrOpConversion,
 
     // Patterns of assignment operations.
-    AssignOpConversion, BAssignOpConversion, NonBAssignOpConversion,
+    // AssignOpConversion, BAssignOpConversion, NonBAssignOpConversion,
+    AssignOpConversion<ContinuousAssignOp>, AssignOpConversion<BlockingAssignOp>,
+    AssignOpConversion<NonBlockingAssignOp>,
 
     // Patterns of branch operations.
     CondBranchOpConversion, BranchOpConversion, ConditionalOpConversion,

@@ -1,4 +1,4 @@
-// RUN: circt-opt --simplify-assigns %s | FileCheck %s
+// RUN: circt-opt --moore-simplify-assigns %s | FileCheck %s
 
  moore.module @Foo() {
     %a = moore.variable : <i8960>

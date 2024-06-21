@@ -1,6 +1,7 @@
 add_circt_dialect_library(CIRCTMooreTransforms
 SimplifyProcedures.cpp
 SimplifyAssigns.cpp
+InfoCollection.cpp
 
 
   DEPENDS

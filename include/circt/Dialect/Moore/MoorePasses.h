@@ -22,6 +22,21 @@ namespace moore {
 #define GEN_PASS_DECL
 #include "circt/Dialect/Moore/MoorePasses.h.inc"
 
+class InfoCollection {
+  // A map used to collect nets or variables and their values.
+  // Only record the value produced by the last assignment op,
+  // including the declaration assignment.
+  DenseMap<Operation *, Value> assignmentChains;
+
+public:
+  void addValue(Operation *op);
+
+  auto getValue(Operation *op) { return assignmentChains.lookup(op); }
+};
+
+extern InfoCollection decl;
+std::unique_ptr<mlir::Pass> createInfoCollectionPass();
+
 std::unique_ptr<mlir::Pass> createSimplifyProceduresPass();
 std::unique_ptr<mlir::Pass> createSimplifyAssignsPass();
 

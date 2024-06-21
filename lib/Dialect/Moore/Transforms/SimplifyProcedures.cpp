@@ -14,11 +14,6 @@
 
 #include "circt/Dialect/Moore/MooreOps.h"
 #include "circt/Dialect/Moore/MoorePasses.h"
-#include "circt/Dialect/Moore/MooreTypes.h"
-#include "mlir/IR/Builders.h"
-#include "mlir/Pass/Pass.h"
-#include "llvm/Support/Casting.h"
-#include "llvm/Support/raw_ostream.h"
 
 namespace circt {
 namespace moore {
@@ -58,7 +53,8 @@ void SimplifyProceduresPass::runOnOperation() {
         // Collect the users of the global variable that is mentioned above.
         DenseSet<Operation *> users;
         for (auto *user : nestedOp.getOperand(0).getUsers())
-          if (!users.contains(user))
+          // Ensuring don't handle the users existing in another procedure body.
+          if (user->getBlock() == procedureOp.getBody())
             users.insert(user);
 
         if (auto varOp = llvm::dyn_cast_or_null<VariableOp>(
